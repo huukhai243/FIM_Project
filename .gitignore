@@ -19,3 +19,6 @@ dist/
 # IDE
 .vscode/
 .idea/
+
+# Báo cáo (chứa thông tin cá nhân, không đưa lên repo công khai)
+bao_cao/
