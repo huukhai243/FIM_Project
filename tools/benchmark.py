@@ -241,7 +241,8 @@ def report(env, scan, lat, acc, out: Path):
     tp = sum(attack(r) and flagged(r) for r in ran); fn = sum(attack(r) and not flagged(r) for r in ran)
     fp = sum(not attack(r) and flagged(r) for r in ran); tn = sum(not attack(r) and not flagged(r) for r in ran)
     prec = tp / (tp + fp) if tp + fp else 0; rec = tp / (tp + fn) if tp + fn else 0
-    L += ['', f'**Ma trận nhầm lẫn** ({len(ran)} kịch bản đã chạy, {len(acc) - len(ran)} kịch bản chỉ chạy trên Linux):', '',
+    skipped = len(acc) - len(ran)
+    L += ['', f'**Ma trận nhầm lẫn** ({len(ran)} kịch bản đã chạy' + (f', bỏ qua {skipped} kịch bản chỉ chạy được trên Linux' if skipped else '') + '):', '',
           '| | Hệ thống báo SUSPICIOUS | Hệ thống báo LEGITIMATE / không báo |', '|---|---:|---:|',
           f'| **Thực tế là tấn công** | TP = {tp} | FN = {fn} |', f'| **Thực tế là hợp lệ** | FP = {fp} | TN = {tn} |', '',
           f'- Accuracy = {(tp + tn) / len(ran):.0%}  ·  Precision = {prec:.0%}  ·  Recall = {rec:.0%}',

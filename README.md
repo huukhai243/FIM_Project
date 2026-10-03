@@ -137,14 +137,15 @@ Cần `sudo` để đọc được `/etc/shadow`, `/root/.ssh`... File không đ
 ## Kiểm thử & đo đạc
 ```bash
 python -m unittest discover -s tests -v     # 22 unit test
-python tools/benchmark.py                   # đo đạc, ghi kết quả ra docs/benchmark_results.md (--quick: bản nhanh)
+python tools/benchmark.py                   # đo đạc (vài phút), ghi kết quả ra docs/benchmark_results.md (--quick: bản nhanh)
 ```
 `tools/benchmark.py` đo 3 chỉ số: tốc độ quét (full / quick scan với 100 đến 10.000 file), độ trễ phát hiện (watchdog so với polling, 20 lần đo mỗi loại), và độ chính xác phân loại trên 18 kịch bản hợp lệ / tấn công (3 kịch bản về quyền chỉ chạy trên Linux).
 
 ## Tài liệu cho báo cáo
 - `docs/diagrams.md`: mã nguồn Mermaid của sơ đồ kiến trúc, triển khai, tuần tự, hoạt động, cơ sở dữ liệu.
 - `docs/diagrams/*.svg`: 4 sơ đồ use case (tổng quan + 3 phân rã), chèn thẳng vào Word.
-- `docs/benchmark_results.md`: kết quả đo đạc.
+- `docs/benchmark_results_linux.md`: kết quả đo trong Docker (Debian 13, inotify), đủ 18 kịch bản, dùng cho mục 2c của báo cáo.
+- `docs/benchmark_results.md`: kết quả đo trên máy phát triển Windows (để so sánh).
 
 ## Ghi chú kỹ thuật
 - **Quick scan / full scan:** khi `monitor` phát hiện sự kiện, file có size + mtime không đổi sẽ dùng lại hash cũ để nhanh hơn. Cứ mỗi `full_scan_interval_seconds` hệ thống hash lại toàn bộ để bắt trường hợp kẻ tấn công giả mạo mtime. `init` / `scan` / `accept` luôn hash lại toàn bộ.
