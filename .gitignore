@@ -1,0 +1,21 @@
+# Môi trường ảo Python
+.venv/
+venv/
+
+# Cache Python
+__pycache__/
+*.pyc
+
+# Dữ liệu sinh ra khi chạy (DB, log)
+data/
+logs/
+*.db
+*.db-wal
+*.db-shm
+
+# File zip nộp bài (tạo bằng pack.ps1)
+dist/
+
+# IDE
+.vscode/
+.idea/
