@@ -22,7 +22,7 @@
   <h2>Baseline</h2>
   <p>Tạo lúc: <b>{{ (st.baseline_at or 'chưa có')[:19]|replace('T', ' ') }}</b> · Lần quét cuối: <b>{{ (st.last_scan_at or '-')[:19]|replace('T', ' ') }}</b></p>
   <form method="post" action="{{ url_for('baseline_accept') }}"
-        onsubmit="return window.confirm('Chấp nhận TOÀN BỘ trạng thái hiện tại làm baseline mới?')">
+        onsubmit="return window.confirm('Chấp nhận TOÀN BỘ trạng thái hiện tại làm baseline mới?')"><input type="hidden" name="csrf" value="{{ csrf_token() }}">
     <button class="danger">Chấp nhận trạng thái hiện tại làm baseline mới</button>
   </form>
 </div>

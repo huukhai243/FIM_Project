@@ -154,21 +154,83 @@ class ServiceTest(_TempProject):
         finally: db.close()
 
 
+    def test_accept_moved_removes_old_path(self):
+        service.initialize(str(self.cfgp))
+        old, new = self.t / 'w' / 'home' / 'n.txt', self.t / 'w' / 'home' / 'n.txt.locked'
+        old.rename(new)
+        self.assertEqual([c.event_type for c, _ in service.scan_baseline(str(self.cfgp))[1]], ['MOVED'])
+        service.accept(str(self.cfgp), [str(new), str(old)])
+        self.assertEqual(service.scan_baseline(str(self.cfgp))[1], [])
+
+    def test_failed_scan_does_not_stop_monitor(self):
+        service.initialize(str(self.cfgp))
+        cfg = service.load_config(str(self.cfgp)); db = service.open_db(cfg); lg = service.logger_for(cfg['log_file'])
+        db.close()                                    # mọi truy vấn sau đây sẽ lỗi
+        service._process_safely(cfg, db, lg)          # phải ghi log lỗi, không được ném ngoại lệ
+        self.assertIn('Quét thất bại', (self.t / 'fim.log').read_text(encoding='utf-8'))
+
+    def test_watch_path_without_path_key(self):
+        self.cfgp.write_text(json.dumps({'watch_paths': [{'label': 'thiếu path'}]}))
+        with self.assertRaises(service.FimError): service.load_config(str(self.cfgp))
+
+
+class ScanDueTest(unittest.TestCase):
+    """Điều kiện quét của monitor: debounce, và giới hạn chờ khi file bị ghi liên tục."""
+    def test_waits_for_quiet_period(self):
+        self.assertFalse(service.scan_due(now=10.3, dirty=True, first=10.0, last=10.0, debounce=0.5, max_wait=2.0))
+        self.assertTrue(service.scan_due(now=10.6, dirty=True, first=10.0, last=10.0, debounce=0.5, max_wait=2.0))
+
+    def test_busy_file_cannot_postpone_scan_forever(self):
+        # sự kiện đến liên tục mỗi 0.2s (last luôn mới), nhưng sự kiện đầu tiên đã chờ 2.1s
+        self.assertTrue(service.scan_due(now=12.1, dirty=True, first=10.0, last=12.0, debounce=0.5, max_wait=2.0))
+
+    def test_nothing_to_do(self):
+        self.assertFalse(service.scan_due(now=99.0, dirty=False, first=0.0, last=0.0, debounce=0.5, max_wait=2.0))
+
+
 class DashboardTest(_TempProject):
-    def test_pages(self):
+    def client(self, with_token=True):
         try: from fim.dashboard import create_app
         except ImportError: self.skipTest('flask not installed')
+        c = create_app(str(self.cfgp)).test_client()
+        if with_token:
+            with c.session_transaction() as s: s['csrf'] = 'test-token'
+        return c
+
+    def test_pages(self):
         service.initialize(str(self.cfgp))
         (self.t / 'w' / 'etc' / 'app.conf').write_text('x=3'); service.scan_baseline(str(self.cfgp), record=True)
-        c = create_app(str(self.cfgp)).test_client()
+        c = self.client()
         for url in ('/', '/events', '/events?verdict=SUSPICIOUS&q=app', '/alerts', '/alerts?status=ALL', '/whitelist', '/scope'):
             self.assertEqual(c.get(url).status_code, 200, url)
         self.assertIn('app.conf', c.get('/alerts').get_data(as_text=True))
-        self.assertEqual(c.post('/whitelist/add', data={'pattern': '*.bak', 'kind': 'ignore'}).status_code, 302)
+        self.assertIn('name="csrf"', c.get('/alerts').get_data(as_text=True))
+        tok = {'csrf': 'test-token'}
+        self.assertEqual(c.post('/whitelist/add', data={'pattern': '*.bak', 'kind': 'ignore', **tok}).status_code, 302)
         self.assertIn('*.bak', c.get('/whitelist').get_data(as_text=True))
-        self.assertEqual(c.post('/alerts/1/accept').status_code, 302)
+        c.post('/whitelist/add', data={'pattern': '*.x', 'kind': 'bogus', **tok})           # kind sai: báo lỗi, không 500
+        self.assertNotIn('*.x', c.get('/whitelist').get_data(as_text=True))
+        self.assertEqual(c.post('/alerts/1/accept', data=tok).status_code, 302)
         self.assertIn('Không có cảnh báo', c.get('/alerts').get_data(as_text=True))
         self.assertEqual(service.scan_baseline(str(self.cfgp))[1], [])
+
+    def test_post_without_csrf_token_is_rejected(self):
+        service.initialize(str(self.cfgp))
+        (self.t / 'w' / 'etc' / 'app.conf').write_text('attacker was here')
+        c = self.client(with_token=False)
+        # mô phỏng trang web lạ gửi form tới dashboard: không biết token => không được thực hiện
+        c.post('/baseline/accept', data={})
+        c.post('/whitelist/add', data={'pattern': '*', 'kind': 'ignore', 'csrf': 'guess'})
+        self.assertNotIn('<td class="path">*</td>', c.get('/whitelist').get_data(as_text=True))
+        self.assertEqual([ch.event_type for ch, _ in service.scan_baseline(str(self.cfgp))[1]], ['MODIFIED'])
+
+    def test_accept_moved_alert_from_dashboard(self):
+        service.initialize(str(self.cfgp))
+        (self.t / 'w' / 'home' / 'n.txt').rename(self.t / 'w' / 'home' / 'n.txt.locked')
+        service.scan_baseline(str(self.cfgp), record=True)
+        c = self.client()
+        self.assertEqual(c.post('/alerts/1/accept', data={'csrf': 'test-token'}).status_code, 302)
+        self.assertEqual(service.scan_baseline(str(self.cfgp))[1], [])     # không còn báo DELETED đường dẫn cũ
 
 
 if __name__ == '__main__': unittest.main()

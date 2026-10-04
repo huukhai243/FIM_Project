@@ -1,8 +1,8 @@
 """Web dashboard: lịch sử thay đổi, alert, whitelist, phạm vi giám sát."""
 from __future__ import annotations
-import os
+import os, secrets
 from pathlib import Path
-from flask import Flask, g, render_template, request, redirect, url_for, flash
+from flask import Flask, g, render_template, request, redirect, url_for, flash, session
 from .config import load_config, FimError, short
 from .service import open_db, accept
 
@@ -12,12 +12,34 @@ PAGE_SIZE = 50
 def create_app(config='config.json') -> Flask:
     cfg = load_config(config)
     app = Flask(__name__)
-    # chỉ dùng để ký cookie flash message; sinh ngẫu nhiên mỗi lần chạy (có thể đặt cố định qua biến môi trường)
+    # ký cookie phiên (flash message, CSRF token); sinh ngẫu nhiên mỗi lần chạy, có thể đặt cố định qua biến môi trường
     app.secret_key = os.environ.get('FIM_SECRET_KEY') or os.urandom(24)
+    app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Strict')
 
     def db():
         if 'db' not in g: g.db = open_db(cfg)
         return g.db
+
+    def back(default='alerts'):
+        """Quay lại trang trước, chỉ khi trang đó thuộc chính dashboard."""
+        ref = request.referrer or ''
+        return redirect(ref if ref.startswith(request.host_url) else url_for(default))
+
+    # Chống CSRF: một trang web lạ mở trong cùng trình duyệt không thể gửi lệnh POST (chấp nhận baseline,
+    # thêm whitelist...) tới dashboard, vì không biết token lưu trong phiên.
+    def csrf_token():
+        if 'csrf' not in session: session['csrf'] = secrets.token_hex(16)
+        return session['csrf']
+
+    app.jinja_env.globals['csrf_token'] = csrf_token
+
+    @app.before_request
+    def _check_csrf():
+        if request.method == 'POST':
+            token = session.get('csrf')
+            if not token or not secrets.compare_digest(token, request.form.get('csrf', '')):
+                flash('Phiên làm việc không hợp lệ hoặc đã hết hạn, thao tác chưa được thực hiện. Hãy thử lại.', 'error')
+                return redirect(url_for('overview'))
 
     @app.teardown_appcontext
     def _close(_exc):
@@ -52,7 +74,7 @@ def create_app(config='config.json') -> Flask:
     @app.post('/alerts/<int:aid>/ack')
     def ack(aid):
         db().ack_alert(aid); flash(f'Alert #{aid} đã được xác nhận.')
-        return redirect(request.referrer or url_for('alerts'))
+        return back()
 
     @app.post('/alerts/ack-all')
     def ack_all():
@@ -60,13 +82,16 @@ def create_app(config='config.json') -> Flask:
 
     @app.post('/alerts/<int:aid>/accept')
     def accept_alert(aid):
-        row = db().conn.execute('SELECT path FROM alerts WHERE id=?', (aid,)).fetchone()
+        row = db().conn.execute('SELECT a.path, e.old_path FROM alerts a LEFT JOIN events e ON e.id = a.event_id '
+                                'WHERE a.id=?', (aid,)).fetchone()
         if row:
+            # MOVED: chấp nhận đường dẫn mới và đồng thời bỏ đường dẫn cũ khỏi baseline
+            paths = [row['path']] + ([row['old_path']] if row['old_path'] else [])
             try:
-                accept(cfg['_config_path'], row['path']); db().ack_alert(aid)
+                accept(cfg['_config_path'], paths); db().ack_alert(aid)
                 flash(f'Đã chấp nhận {short(row["path"])} vào baseline và xác nhận alert #{aid}.')
             except FimError as e: flash(str(e), 'error')
-        return redirect(request.referrer or url_for('alerts'))
+        return back()
 
     @app.route('/whitelist')
     def whitelist():
@@ -76,6 +101,7 @@ def create_app(config='config.json') -> Flask:
     def whitelist_add():
         pat = request.form.get('pattern', '').strip()
         if not pat: flash('Pattern không được để trống.', 'error')
+        elif request.form.get('kind', 'ignore') not in ('ignore', 'allow'): flash('Loại rule phải là ignore hoặc allow.', 'error')
         else:
             ok = db().whitelist_add(pat, request.form.get('kind', 'ignore'), request.form.get('events') or '*',
                                     request.form.get('note', ''))

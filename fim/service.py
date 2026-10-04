@@ -113,6 +113,20 @@ def process_once(cfg, db, lg, full=False):
     return results
 
 
+def scan_due(now, dirty, first, last, debounce, max_wait):
+    """Đã đến lúc quét chưa: các sự kiện đã lắng xuống đủ `debounce` giây, hoặc sự kiện đầu tiên đã chờ quá
+    `max_wait` giây. Điều kiện thứ hai tránh trường hợp một file bị ghi liên tục (log) làm monitor không bao giờ quét."""
+    return dirty and (now - last >= debounce or now - first >= max_wait)
+
+
+def _process_safely(cfg, db, lg, full=False):
+    """Một lần quét lỗi (vd. CSDL đang bị khóa) không được làm dừng monitor."""
+    try:
+        process_once(cfg, db, lg, full=full)
+    except Exception:
+        lg.exception('Quét thất bại, sẽ thử lại ở lần sau')
+
+
 def monitor(config='config.json'):
     cfg = load_config(config); lg = logger_for(cfg['log_file']); db = open_db(cfg)
     try:
@@ -136,22 +150,26 @@ def monitor(config='config.json'):
             Observer = None
         if Observer:
             class H(FileSystemEventHandler):
-                def __init__(self): self.dirty = True; self.last = 0.0
+                def __init__(self): self.dirty = True; self.first = self.last = 0.0
                 def on_any_event(self, event):
                     if event.event_type in IGNORED_WATCHDOG_EVENTS: return
                     if str(event.src_path).replace('\\', '/').startswith(skip): return
-                    self.dirty = True; self.last = time.time()
+                    now = time.time()
+                    if not self.dirty: self.first = now      # sự kiện đầu tiên kể từ lần quét trước
+                    self.dirty = True; self.last = now
             h = H(); obs = Observer()
             for r in watch: obs.schedule(h, r, recursive=True)
             obs.start(); lg.info('Monitoring (watchdog) %d path(s): %s', len(watch), ', '.join(map(short, watch)))
             debounce = float(cfg.get('debounce_seconds', 0.5)); last_full = time.time()
+            max_wait = float(cfg.get('max_event_delay_seconds', 2.0))
             try:
                 while True:
-                    time.sleep(0.2)
-                    if time.time() - last_full >= full_every:
-                        process_once(cfg, db, lg, full=True); last_full = time.time(); h.dirty = False
-                    elif h.dirty and time.time() - h.last >= debounce:
-                        h.dirty = False; process_once(cfg, db, lg)
+                    time.sleep(0.2); now = time.time()
+                    # Hạ cờ dirty TRƯỚC khi quét: sự kiện xảy ra trong lúc quét sẽ được xử lý ở vòng sau
+                    if now - last_full >= full_every:
+                        h.dirty = False; _process_safely(cfg, db, lg, full=True); last_full = time.time()
+                    elif scan_due(now, h.dirty, h.first, h.last, debounce, max_wait):
+                        h.dirty = False; _process_safely(cfg, db, lg)
             except KeyboardInterrupt: lg.info('Monitoring stopped.')
             finally: obs.stop(); obs.join()
         else:
@@ -160,7 +178,7 @@ def monitor(config='config.json'):
             try:
                 while True:
                     full = time.time() - last_full >= full_every
-                    process_once(cfg, db, lg, full=full)
+                    _process_safely(cfg, db, lg, full=full)
                     if full: last_full = time.time()
                     time.sleep(delay)
             except KeyboardInterrupt: lg.info('Monitoring stopped.')
@@ -168,22 +186,25 @@ def monitor(config='config.json'):
 
 
 def accept(config='config.json', path=None):
-    """Chấp nhận thay đổi: toàn bộ (path=None) hoặc một file vào baseline."""
+    """Chấp nhận thay đổi vào baseline: toàn bộ (path=None), một file, hoặc danh sách file
+    (vd. cảnh báo MOVED: chấp nhận đường dẫn mới và xóa đường dẫn cũ khỏi baseline)."""
     cfg = load_config(config); lg = logger_for(cfg['log_file']); db = open_db(cfg)
     try:
         _require_baseline(db)
         if path is None:
             s, _ = _full_scan(cfg, db, lg); db.replace_baseline(s); db.replace_current(s)
             lg.info('Accepted current state as new baseline: %d file(s)', len(s)); return len(s)
-        key = Path(path).expanduser().resolve().as_posix()
+        paths = [path] if isinstance(path, (str, os.PathLike)) else list(path)
         known = set(db.load_baseline()) | set(db.load_current())
-        if key not in known and not any(key.startswith(r.rstrip('/') + '/') for r in roots(cfg)):
-            raise FimError(f'{key} không nằm trong thư mục giám sát nào.')
-        p = Path(key)
-        if p.is_file():
-            st = p.stat(); db.set_baseline_file(key, FileState(key, sha256_file(p), st.st_size, st.st_mtime_ns, st.st_mode & 0o7777))
-            lg.info('Accepted into baseline: %s', short(key))
-        else:
-            db.set_baseline_file(key, None); lg.info('Removed from baseline (file no longer exists): %s', short(key))
-        return 1
+        for one in paths:
+            key = Path(one).expanduser().resolve().as_posix()
+            if key not in known and not any(key.startswith(r.rstrip('/') + '/') for r in roots(cfg)):
+                raise FimError(f'{key} không nằm trong thư mục giám sát nào.')
+            p = Path(key)
+            if p.is_file():
+                st = p.stat(); db.set_baseline_file(key, FileState(key, sha256_file(p), st.st_size, st.st_mtime_ns, st.st_mode & 0o7777))
+                lg.info('Accepted into baseline: %s', short(key))
+            else:
+                db.set_baseline_file(key, None); lg.info('Removed from baseline (file no longer exists): %s', short(key))
+        return len(paths)
     finally: db.close()

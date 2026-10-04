@@ -7,7 +7,7 @@
     <a class="btn" href="{{ url_for('alerts', status=s) }}" style="{{ 'border-color:var(--accent)' if status == s }}">{{ label }}</a>
   {% endfor %}
   {% if status == 'NEW' and rows %}
-  <form class="inline" method="post" action="{{ url_for('ack_all') }}" style="margin-left:auto"><button>Xác nhận tất cả</button></form>
+  <form class="inline" method="post" action="{{ url_for('ack_all') }}" style="margin-left:auto"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><button>Xác nhận tất cả</button></form>
   {% endif %}
 </div>
 <div class="card table-wrap">
@@ -23,8 +23,8 @@
         {% if a.acked_at %}<div class="muted small">{{ a.acked_at[:19]|replace('T', ' ') }}</div>{% endif %}</td>
       <td style="white-space:nowrap">
         {% if a.status == 'NEW' %}
-        <form class="inline" method="post" action="{{ url_for('ack', aid=a.id) }}"><button title="Đã kiểm tra, giữ nguyên baseline">Xác nhận</button></form>
-        <form class="inline" method="post" action="{{ url_for('accept_alert', aid=a.id) }}"><button title="Thay đổi hợp lệ: cập nhật file này vào baseline">Chấp nhận vào baseline</button></form>
+        <form class="inline" method="post" action="{{ url_for('ack', aid=a.id) }}"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><button title="Đã kiểm tra, giữ nguyên baseline">Xác nhận</button></form>
+        <form class="inline" method="post" action="{{ url_for('accept_alert', aid=a.id) }}"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><button title="Thay đổi hợp lệ: cập nhật file này vào baseline">Chấp nhận vào baseline</button></form>
         {% endif %}
       </td>
     </tr>

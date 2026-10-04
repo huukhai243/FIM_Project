@@ -136,7 +136,7 @@ Cần `sudo` để đọc được `/etc/shadow`, `/root/.ssh`... File không đ
 
 ## Kiểm thử & đo đạc
 ```bash
-python -m unittest discover -s tests -v     # 22 unit test
+python -m unittest discover -s tests -v     # 30 unit test
 python tools/benchmark.py                   # đo đạc (vài phút), ghi kết quả ra docs/benchmark_results.md (--quick: bản nhanh)
 ```
 `tools/benchmark.py` đo 3 chỉ số: tốc độ quét (full / quick scan với 100 đến 10.000 file), độ trễ phát hiện (watchdog so với polling, 20 lần đo mỗi loại), và độ chính xác phân loại trên 18 kịch bản hợp lệ / tấn công (3 kịch bản về quyền chỉ chạy trên Linux).
@@ -149,6 +149,8 @@ python tools/benchmark.py                   # đo đạc (vài phút), ghi kết
 
 ## Ghi chú kỹ thuật
 - **Quick scan / full scan:** khi `monitor` phát hiện sự kiện, file có size + mtime không đổi sẽ dùng lại hash cũ để nhanh hơn. Cứ mỗi `full_scan_interval_seconds` hệ thống hash lại toàn bộ để bắt trường hợp kẻ tấn công giả mạo mtime. `init` / `scan` / `accept` luôn hash lại toàn bộ.
+- **Debounce có giới hạn:** monitor chờ các sự kiện lắng xuống `debounce_seconds` rồi mới quét, nhưng không chờ quá `max_event_delay_seconds` (mặc định 2 giây). Nhờ vậy một file bị ghi liên tục (log) không làm monitor trì hoãn việc quét mãi mãi.
+- **Dashboard chống CSRF:** mọi form POST có token lưu trong phiên (cookie `SameSite=Strict`), nên một trang web lạ mở trong cùng trình duyệt không thể gửi lệnh chấp nhận baseline hay thêm whitelist.
 - **So sánh inotify và polling:** đặt `"force_polling": true` trong config để buộc `monitor` dùng polling.
 - **Phát hiện đổi tên:** một file bị xóa và một file mới có cùng SHA-256 trong cùng lần quét → `MOVED`.
 - Trên Windows, `st_mode` không phản ánh quyền thật nên các heuristic về quyền chỉ bật trên Linux (`check_unix_permissions`).

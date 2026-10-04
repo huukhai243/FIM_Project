@@ -29,6 +29,8 @@ def load_config(config_path="config.json") -> dict:
     # Tương thích bản cũ: "watch_root": "folder"
     watch = cfg.get('watch_paths') or ([cfg['watch_root']] if cfg.get('watch_root') else [])
     if not watch: raise FimError('Config cần "watch_paths" (danh sách thư mục giám sát).')
+    if any(isinstance(w, dict) and not w.get('path') for w in watch):
+        raise FimError('Mỗi mục trong "watch_paths" cần có khóa "path".')
     cfg['watch_paths'] = [dict(w, path=_abs(w['path'], root)) if isinstance(w, dict) else {'path': _abs(w, root)}
                           for w in watch]
     for key, default in (("database", "data/fim.db"), ("log_file", "logs/fim.log")):

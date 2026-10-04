@@ -10,6 +10,7 @@
 
   "poll_interval_seconds": 1.0,
   "debounce_seconds": 0.5,
+  "max_event_delay_seconds": 2.0,
   "full_scan_interval_seconds": 600,
 
   "whitelist": ["*.tmp", "*.swp", "~*", "__pycache__/", "*.pyc"],
