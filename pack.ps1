@@ -10,7 +10,7 @@ $zip   = Join-Path $dist 'FIM_Project.zip'
 
 # Thu muc / file khong nop: moi truong ao, cache, DB va log tu cac lan chay thu; bao cao nop rieng
 $excludeDirs  = @('.venv', 'venv', '__pycache__', 'data', 'logs', 'dist', '.git', '.vscode', '.idea', '.claude', 'bao_cao')
-$excludeFiles = @('*.pyc', '*.db', '*.db-wal', '*.db-shm', '*.log.1', 'pack.ps1')
+$excludeFiles = @('*.docx', '*.doc', '~$*', '*.pyc', '*.db', '*.db-wal', '*.db-shm', '*.log.1', 'pack.ps1')
 
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 New-Item -ItemType Directory -Force $stage, $dist | Out-Null
