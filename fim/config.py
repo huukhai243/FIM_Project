@@ -31,8 +31,16 @@ def load_config(config_path="config.json") -> dict:
     if not watch: raise FimError('Config cần "watch_paths" (danh sách thư mục giám sát).')
     if any(isinstance(w, dict) and not w.get('path') for w in watch):
         raise FimError('Mỗi mục trong "watch_paths" cần có khóa "path".')
-    cfg['watch_paths'] = [dict(w, path=_abs(w['path'], root)) if isinstance(w, dict) else {'path': _abs(w, root)}
-                          for w in watch]
+    # Gộp các mục trỏ tới cùng một thư mục sau khi giải symlink (vd. /bin -> /usr/bin trên Debian, Ubuntu mới),
+    # tránh quét và hiển thị một thư mục hai lần; giữ nhãn của mục đầu, critical nếu một trong các mục là critical
+    merged: dict[str, dict] = {}
+    for w in watch:
+        w = dict(w, path=_abs(w['path'], root)) if isinstance(w, dict) else {'path': _abs(w, root)}
+        if w['path'] in merged:
+            merged[w['path']]['critical'] = bool(merged[w['path']].get('critical') or w.get('critical'))
+        else:
+            merged[w['path']] = w
+    cfg['watch_paths'] = list(merged.values())
     for key, default in (("database", "data/fim.db"), ("log_file", "logs/fim.log")):
         cfg[key] = _abs(cfg.get(key, default), root)
     cfg['_config_path'] = str(path.resolve())

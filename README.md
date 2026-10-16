@@ -139,7 +139,7 @@ Cần `sudo` để đọc được `/etc/shadow`, `/root/.ssh`... File không đ
 
 ## Kiểm thử & đo đạc
 ```bash
-python -m unittest discover -s tests -v     # 43 unit test
+python -m unittest discover -s tests -v     # 45 unit test
 python tools/benchmark.py                   # đo đạc (khoảng 8 phút), ghi kết quả ra docs/benchmark_results.md (--quick: bản nhanh)
 ```
 `tools/benchmark.py` gồm 6 phần:

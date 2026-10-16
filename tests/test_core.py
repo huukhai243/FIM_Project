@@ -199,6 +199,16 @@ class ServiceTest(_TempProject):
         finally: db.close()
 
 
+    def test_watch_paths_pointing_to_same_directory_are_merged(self):
+        """Trên Debian, Ubuntu mới /bin là symlink tới /usr/bin: hai mục cùng trỏ một thư mục chỉ được giữ một."""
+        cfg = json.loads(self.cfgp.read_text())
+        cfg['watch_paths'].append({'path': (self.t / 'w' / 'home' / '..' / 'etc').as_posix(), 'label': 'dup', 'critical': False})
+        cfg['watch_paths'].append({'path': (self.t / 'w' / 'home').as_posix(), 'critical': True})
+        self.cfgp.write_text(json.dumps(cfg))
+        ws = service.load_config(str(self.cfgp))['watch_paths']
+        self.assertEqual([(Path(w['path']).name, bool(w.get('critical'))) for w in ws], [('etc', True), ('home', True)])
+        self.assertNotIn('label', ws[0])
+
     def test_current_state_writes_only_changed_rows(self):
         db = FimDB(self.t / 'x.db')
         try:

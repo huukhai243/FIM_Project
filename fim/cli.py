@@ -15,7 +15,7 @@ def show(results, errors=()):
             if v.reasons: print(' ' * 25 + 'reason: ' + v.details)
         n = sum(v.verdict == 'SUSPICIOUS' for _, v in results)
         print(f'\n{len(results)} change(s), {n} suspicious.')
-    if errors: print(f'{len(errors)} file(s) could not be read (permission?). First: {errors[0]}')
+    if errors: print(f'{len(errors)} path(s) skipped (missing or not readable). First: {errors[0]}')
 
 
 def _db(args):
