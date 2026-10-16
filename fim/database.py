@@ -61,6 +61,16 @@ class FimDB:
         self._replace('baseline', s); ts = now_iso(); self.set_meta('baseline_at', ts); self.set_meta('last_scan_at', ts)
     def replace_current(self, s): self._replace('current_state', s)
 
+    def update_current(self, states, stored):
+        """Chỉ ghi các dòng khác với trạng thái đã lưu `stored`. Monitor gọi hàm này sau mỗi lần quét
+        (polling: mỗi giây), nên không xóa và ghi lại cả bảng khi không có gì thay đổi."""
+        gone = [(p,) for p in stored.keys() - states.keys()]
+        dirty = [self._row(s) for p, s in states.items() if stored.get(p) != s]
+        if not gone and not dirty: return 0
+        c = self.conn.cursor(); c.executemany('DELETE FROM current_state WHERE path=?', gone)
+        c.executemany(f'INSERT OR REPLACE INTO current_state({STATE_COLS}) VALUES(?,?,?,?,?,?,?)', dirty)
+        self.conn.commit(); return len(gone) + len(dirty)
+
     def _load(self, table):
         rows = self.conn.execute(f'SELECT {STATE_COLS} FROM {table}').fetchall()
         return {r['path']: FileState(*r) for r in rows}

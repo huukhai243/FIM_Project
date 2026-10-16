@@ -1,7 +1,7 @@
 import json, os, tempfile, time, unittest
 from datetime import datetime
 from pathlib import Path
-from fim.core import FileState, compare_states, Change, scan_tree
+from fim.core import FileState, compare_states, Change, scan_tree, matches
 from fim.rules import classify
 from fim.database import FimDB
 from fim import service
@@ -136,6 +136,15 @@ class ScanTest(unittest.TestCase):
         self.assertEqual(scan_tree([self.root.as_posix()], ['*.tmp', '__pycache__/'], prev=fake)[0][key].sha256, 'cached')
         self.assertNotEqual(scan_tree([self.root.as_posix()], ['*.tmp', '__pycache__/'])[0][key].sha256, 'cached')
 
+    def test_patterns_match_like_fnmatch(self):
+        """matches() gộp pattern thành một regex nhưng phải cho kết quả như fnmatch trên từng hệ điều hành."""
+        import fnmatch
+        cases = [('*.tmp', 'a/b.tmp'), ('*.TMP', 'a/b.tmp'), ('*/etc/*', '/x/etc/passwd'), ('__pycache__/', 'sub/__pycache__/'),
+                 ('__pycache__/', '__pycache__/'), ('[!a]*.log', 'b.log'), ('[!a]*.log', 'a.log'), ('etc\\*', 'etc/x'), ('passwd', 'passwd.bak')]
+        for pat, s in cases:
+            self.assertEqual(matches([pat], s), fnmatch.fnmatch(s, pat), (pat, s))
+        self.assertTrue(matches(['*.swp', '*.tmp'], 'x', 'y.tmp')); self.assertFalse(matches([], 'y.tmp'))
+
 
 class _TempProject(unittest.TestCase):
     """Thư mục giám sát + config tạm."""
@@ -189,6 +198,17 @@ class ServiceTest(_TempProject):
             self.assertEqual(service.process_once(cfg, db, lg), [])
         finally: db.close()
 
+
+    def test_current_state_writes_only_changed_rows(self):
+        db = FimDB(self.t / 'x.db')
+        try:
+            a, b = fs('/w/a'), fs('/w/b')
+            self.assertEqual(db.update_current({'/w/a': a, '/w/b': b}, {}), 2)
+            self.assertEqual(db.update_current({'/w/a': a, '/w/b': b}, db.load_current()), 0)   # không đổi -> không ghi
+            a2 = fs('/w/a', sha='z')
+            self.assertEqual(db.update_current({'/w/a': a2}, db.load_current()), 2)             # 1 sửa + 1 xóa
+            self.assertEqual(db.load_current(), {'/w/a': a2})
+        finally: db.close()
 
     def test_accept_moved_removes_old_path(self):
         service.initialize(str(self.cfgp))

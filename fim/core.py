@@ -1,6 +1,6 @@
 """Baseline hash & so sánh trạng thái file."""
 from __future__ import annotations
-import fnmatch, hashlib, os, stat
+import fnmatch, functools, hashlib, os, re, stat
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -36,9 +36,21 @@ def sha256_file(path: Path, chunk_size=1024 * 1024) -> str:
     return h.hexdigest()
 
 
+@functools.lru_cache(maxsize=64)
+def _compile(patterns: tuple[str, ...]):
+    """Gộp các pattern thành một regex. Hàm matches được gọi cho mọi file ở mỗi lần quét; gọi fnmatch cho từng
+    cặp (pattern, chuỗi) chiếm phần lớn thời gian quét. Trên Windows, giống fnmatch: không phân biệt hoa thường
+    và coi \\ như / (các đường dẫn so khớp luôn dùng /)."""
+    if not patterns: return None
+    nt = os.name == 'nt'
+    return re.compile('|'.join(fnmatch.translate(p.replace('\\', '/') if nt else p) for p in patterns),
+                      re.IGNORECASE if nt else 0)
+
+
 def matches(patterns, *candidates) -> bool:
-    """True nếu một trong các chuỗi (đường dẫn tuyệt đối, tương đối, tên file) khớp một pattern."""
-    return any(fnmatch.fnmatch(c, x) for x in patterns for c in candidates if c)
+    """True nếu một trong các chuỗi (đường dẫn tuyệt đối, tương đối, tên file; dùng dấu /) khớp một pattern."""
+    rx = _compile(tuple(patterns))
+    return rx is not None and any(rx.match(c) for c in candidates if c)
 
 
 def rel_path(key: str, roots: list[str]) -> str:
@@ -65,21 +77,23 @@ def scan_tree(roots: list[str], ignore=(), prev: dict[str, FileState] | None = N
         rootp = Path(root)
         if not rootp.is_dir():
             errors.append(f'{root}: thư mục không tồn tại'); continue
+        base = rootp.as_posix().rstrip('/')
         for dirpath, dirnames, filenames in os.walk(rootp, onerror=lambda e: errors.append(f'{e.filename}: {e.strerror}')):
-            cur = Path(dirpath)
-            dirnames[:] = [d for d in dirnames
-                           if not matches(ignore, (cur / d).relative_to(rootp).as_posix() + '/', d + '/')]
+            # Ghép đường dẫn bằng chuỗi: Path.relative_to cho từng file rất chậm khi thư mục có hàng nghìn file
+            cur = Path(dirpath).as_posix().rstrip('/'); sub = cur[len(base) + 1:]
+            prefix = sub + '/' if sub else ''
+            dirnames[:] = [d for d in dirnames if not matches(ignore, f'{prefix}{d}/', d + '/')]
             for name in filenames:
-                p = cur / name; key = p.as_posix(); rel = p.relative_to(rootp).as_posix()
+                key = f'{cur}/{name}'; rel = prefix + name
                 if matches(ignore, key, rel, name): continue
                 try:
-                    st = p.stat()
+                    st = os.stat(key)
                     if not stat.S_ISREG(st.st_mode): continue   # bỏ qua socket, FIFO, device...
                     old = prev.get(key) if prev else None
                     if old and old.size == st.st_size and old.mtime_ns == st.st_mtime_ns:
                         digest = old.sha256
                     else:
-                        digest = sha256_file(p)
+                        digest = sha256_file(Path(key))
                     states[key] = FileState(key, digest, st.st_size, st.st_mtime_ns, st.st_mode & 0o7777, st.st_uid, st.st_gid)
                 except OSError as e:
                     errors.append(f'{key}: {e.strerror or e}')

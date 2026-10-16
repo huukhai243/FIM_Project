@@ -75,7 +75,7 @@ sequenceDiagram
   Note over DB: INSERT events<br/>INSERT alerts (NEW)
   DB-->>MON: event_id, alert_id
   MON->>MON: Log CRITICAL,<br/>ghi alerts.log
-  MON->>DB: replace_current()
+  MON->>DB: update_current()
 ```
 
 ## Hình 8. Sơ đồ tuần tự: quản trị viên xử lý cảnh báo
@@ -142,6 +142,8 @@ erDiagram
     INTEGER size "kích thước, byte"
     INTEGER mtime_ns "thời điểm sửa, ns"
     INTEGER mode "quyền Unix"
+    INTEGER uid "chủ sở hữu"
+    INTEGER gid "nhóm sở hữu"
   }
   CURRENT_STATE {
     TEXT path PK "đường dẫn tuyệt đối"
@@ -149,12 +151,14 @@ erDiagram
     INTEGER size "kích thước, byte"
     INTEGER mtime_ns "thời điểm sửa, ns"
     INTEGER mode "quyền Unix"
+    INTEGER uid "chủ sở hữu"
+    INTEGER gid "nhóm sở hữu"
   }
   EVENTS {
     INTEGER id PK "tự tăng"
     TEXT timestamp "ISO 8601"
     TEXT path "file thay đổi"
-    TEXT event_type "CREATED, MODIFIED, DELETED, MOVED, PERMISSION_CHANGED"
+    TEXT event_type "CREATED, MODIFIED, OWNER_CHANGED... ghép bằng +"
     INTEGER risk_score "điểm heuristic"
     TEXT risk_level "LOW, MEDIUM, HIGH"
     TEXT details "lý do chấm điểm"

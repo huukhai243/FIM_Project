@@ -6,7 +6,7 @@
 
 | Phần | Yêu cầu | Hiện thực | Module |
 |---|---|---|---|
-| 1 | Baseline hash toàn bộ file quan trọng | SHA-256 + size/mtime/permission, lưu SQLite | `fim/core.py`, `fim/database.py` |
+| 1 | Baseline hash toàn bộ file quan trọng | SHA-256 + size/mtime/permission/chủ sở hữu (uid, gid), lưu SQLite | `fim/core.py`, `fim/database.py` |
 | 1 | Theo dõi thay đổi (inotify/polling) | `watchdog` (dùng inotify trên Linux), tự chuyển sang polling nếu thiếu; quét lại toàn bộ định kỳ | `fim/service.py` |
 | 2 | Phân loại hợp lệ vs đáng ngờ | Heuristic chấm điểm → `LEGITIMATE` / `SUSPICIOUS` | `fim/rules.py` |
 | 2 | Whitelist | `ignore` (không theo dõi) và `allow` (thay đổi được phép, không cảnh báo) | `fim/rules.py`, `fim/database.py` |
@@ -23,7 +23,8 @@
                                   ▼
   Scanner (core.py) ── SHA-256 + metadata ── whitelist ignore
                                   │
-  Compare với baseline / current state ──► CREATED | MODIFIED | DELETED | MOVED | PERMISSION_CHANGED
+  Compare với baseline / current state ──► CREATED | MODIFIED | DELETED | MOVED
+                                           PERMISSION_CHANGED | OWNER_CHANGED | TIMESTAMP_CHANGED
                                   │
   Rules (rules.py): heuristic score ─► LOW/MEDIUM/HIGH ─► whitelist allow? ─► LEGITIMATE | SUSPICIOUS
                                   │
@@ -39,7 +40,7 @@ docker compose logs -f monitor                    # xem cảnh báo thời gian 
 docker compose exec monitor sh tools/demo_attack.sh        # kịch bản vận hành: 8 thay đổi hợp lệ + tấn công
 docker compose exec monitor python main.py alerts          # mọi lệnh CLI chạy được qua exec
 docker compose exec monitor python -m unittest discover -s tests
-docker compose exec monitor python tools/benchmark.py      # đo đạc trên Linux (đủ cả 18 kịch bản)
+docker run --rm -v "${PWD}/docs:/out" fim-project:2.0 python tools/benchmark.py --out /out/benchmark_results_linux.md   # đo đạc trên Linux (đủ 20 kịch bản, RQ1-RQ3)
 docker compose exec monitor cat /etc/os-release            # phiên bản hệ điều hành cho báo cáo
 docker compose down                               # dừng
 docker compose down -v                            # dừng và xóa dữ liệu: DB, log, thư mục demo về trạng thái gốc
@@ -84,7 +85,9 @@ Dùng config khác: `python main.py --config config.linux.json <lệnh>`.
 | Heuristic | Điểm |
 |---|---:|
 | CREATED / MODIFIED / MOVED / DELETED | +1 / +2 / +2 / +3 |
-| PERMISSION_CHANGED | +2 |
+| PERMISSION_CHANGED / OWNER_CHANGED (chown) | +2 / +3 |
+| Thời gian sửa bị lùi về quá khứ (timestomp, MITRE T1070.006) | +4 |
+| Chỉ thời gian sửa tiến lên, nội dung giữ nguyên (`touch`) | 0, `LEGITIMATE` |
 | Nằm trong thư mục `critical` (vd. `/etc`, `/bin`) | +2 |
 | Đường dẫn nhạy cảm (`*.conf`, `passwd`, `shadow`, `sudoers`, `authorized_keys`...) | +3 |
 | File thực thi / script (`.sh`, `.py`, `.so`...) | +2 |
@@ -94,12 +97,12 @@ Dùng config khác: `python main.py --config config.linux.json <lệnh>`.
 | File bị làm rỗng (size → 0) | +2 |
 | Thêm quyền thực thi / setuid-setgid / world-writable *(Linux)* | +3 / +4 / +3 |
 | Ngoài giờ làm việc (`work_hours`, mặc định 7h-19h) | +1 |
-| Thay đổi hàng loạt (≥ `mass_change_threshold` file trong 1 lần quét) | +3 |
+| Thay đổi hàng loạt (≥ `mass_change_threshold` file đổi trong cửa sổ `mass_change_window_seconds`, mặc định 10 file / 60 giây) | +3 |
 
 - Mức: `0-2 LOW`, `3-4 MEDIUM`, `≥5 HIGH`.
 - Kết luận: `SUSPICIOUS` nếu điểm ≥ `suspicious_threshold` (mặc định 3, tức MEDIUM trở lên) → **tạo alert**. Ngược lại `LEGITIMATE`.
 - Rule whitelist `allow` khớp (pattern + loại sự kiện) → `LEGITIMATE`, vẫn ghi vào lịch sử nhưng không alert. Ví dụ `*.log` với `CREATED,MODIFIED`: log được ghi thêm là bình thường, nhưng **xóa** log vẫn bị cảnh báo.
-- Whitelist **không che được** 3 dấu hiệu nghiêm trọng: làm rỗng file, bật setuid/setgid, đuôi kiểu ransomware. Ví dụ làm rỗng `app.log` (xóa dấu vết) vẫn bị cảnh báo dù khớp `allow *.log`.
+- Whitelist **không che được** 4 dấu hiệu nghiêm trọng: làm rỗng file, bật setuid/setgid, đuôi kiểu ransomware, lùi thời gian sửa. Ví dụ làm rỗng `app.log` (xóa dấu vết) vẫn bị cảnh báo dù khớp `allow *.log`.
 - Rule `ignore`: file không được đưa vào baseline (file tạm, cache...).
 
 ## Kịch bản demo (Ubuntu, dùng `test_folder`)
@@ -136,15 +139,21 @@ Cần `sudo` để đọc được `/etc/shadow`, `/root/.ssh`... File không đ
 
 ## Kiểm thử & đo đạc
 ```bash
-python -m unittest discover -s tests -v     # 30 unit test
-python tools/benchmark.py                   # đo đạc (vài phút), ghi kết quả ra docs/benchmark_results.md (--quick: bản nhanh)
+python -m unittest discover -s tests -v     # 43 unit test
+python tools/benchmark.py                   # đo đạc (khoảng 8 phút), ghi kết quả ra docs/benchmark_results.md (--quick: bản nhanh)
 ```
-`tools/benchmark.py` đo 3 chỉ số: tốc độ quét (full / quick scan với 100 đến 10.000 file), độ trễ phát hiện (watchdog so với polling, 20 lần đo mỗi loại), và độ chính xác phân loại trên 18 kịch bản hợp lệ / tấn công (3 kịch bản về quyền chỉ chạy trên Linux).
+`tools/benchmark.py` gồm 6 phần:
+1. Tốc độ quét: full / quick scan với 100 đến 10.000 file.
+2. Độ trễ phát hiện: watchdog so với polling, 20 lần đo mỗi loại.
+3. Độ chính xác phân loại trên 20 kịch bản hợp lệ / tấn công (4 kịch bản về quyền, chủ sở hữu chỉ chạy trên Linux; chown cần root), kèm so sánh với cách chỉ so mã băm.
+4. RQ1: chỉ giám sát thời gian thực so với thời gian thực + quét toàn bộ định kỳ, với thay đổi "lén" (giữ nguyên kích thước, trả lại thời gian sửa cũ).
+5. RQ2: M0 (mọi thay đổi đều là cảnh báo) so với M1 (thêm whitelist, chấm điểm, accept) trên khối lượng công việc mô phỏng một ngày.
+6. RQ3: CPU và RAM của tiến trình monitor với 100 / 500 / 1.000 / 5.000 file (chỉ Linux).
 
 ## Tài liệu cho báo cáo
 - `docs/diagrams.md`: mã nguồn Mermaid của sơ đồ kiến trúc, triển khai, tuần tự, hoạt động, cơ sở dữ liệu.
 - `docs/diagrams/*.svg`: 4 sơ đồ use case (tổng quan + 3 phân rã), chèn thẳng vào Word.
-- `docs/benchmark_results_linux.md`: kết quả đo trong Docker (Debian 13, inotify), đủ 18 kịch bản, dùng cho mục 2c của báo cáo.
+- `docs/benchmark_results_linux.md`: kết quả đo trong Docker (Debian 13, inotify), đủ 20 kịch bản và RQ1-RQ3, dùng cho báo cáo.
 - `docs/benchmark_results.md`: kết quả đo trên máy phát triển Windows (để so sánh).
 
 ## Ghi chú kỹ thuật
@@ -153,9 +162,12 @@ python tools/benchmark.py                   # đo đạc (vài phút), ghi kết
 - **Dashboard chống CSRF:** mọi form POST có token lưu trong phiên (cookie `SameSite=Strict`), nên một trang web lạ mở trong cùng trình duyệt không thể gửi lệnh chấp nhận baseline hay thêm whitelist.
 - **So sánh inotify và polling:** đặt `"force_polling": true` trong config để buộc `monitor` dùng polling.
 - **Phát hiện đổi tên:** một file bị xóa và một file mới có cùng SHA-256 trong cùng lần quét → `MOVED`.
+- **Chủ sở hữu và thời gian sửa:** baseline lưu uid/gid, đổi chủ sở hữu → `OWNER_CHANGED`. Nếu chỉ thời gian sửa thay đổi → `TIMESTAMP_CHANGED`: tiến lên (`touch`) là hợp lệ, lùi về quá khứ là dấu hiệu che giấu thay đổi (timestomp) và luôn bị cảnh báo.
+- **Thay đổi hàng loạt theo cửa sổ thời gian:** đếm số file có thời gian sửa cách nhau không quá `mass_change_window_seconds`, không đếm cả lần quét. Nhờ vậy `scan` đối chiếu baseline sau nhiều ngày không coi các thay đổi rải rác là "hàng loạt".
+- **Bảo vệ CSDL:** trên Linux, file CSDL chỉ chủ sở hữu đọc/ghi được (quyền 600). Monitor chỉ ghi lại các dòng thay đổi của bảng `current_state` thay vì ghi lại cả bảng sau mỗi lần quét.
 - Trên Windows, `st_mode` không phản ánh quyền thật nên các heuristic về quyền chỉ bật trên Linux (`check_unix_permissions`).
 - Dashboard chỉ lắng nghe `127.0.0.1` và không có đăng nhập. Đây là công cụ nội bộ, không nên mở ra mạng ngoài.
-- DB của bản v1.0 được tự nâng cấp (thêm cột) khi mở.
+- DB của phiên bản cũ được tự nâng cấp (thêm cột) khi mở; file trong baseline cũ chưa có uid/gid sẽ không bị báo nhầm là đổi chủ sở hữu.
 
 ## Phạm vi
 Đây là prototype học tập, không thay thế AIDE/Tripwire/Wazuh hoặc giải pháp FIM doanh nghiệp. Hạn chế: không chống được root đã chiếm quyền (có thể sửa cả DB baseline), chưa ký/kiểm tra toàn vẹn chính DB, chưa gửi cảnh báo qua email/Telegram.

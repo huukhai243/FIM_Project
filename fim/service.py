@@ -106,11 +106,11 @@ def scan_baseline(config='config.json', record=False):
 
 
 def process_once(cfg, db, lg, full=False):
-    ignore = db.ignore_patterns()
-    prev = _drop_ignored(db.load_current(), cfg, ignore)
+    ignore = db.ignore_patterns(); stored = db.load_current()
+    prev = _drop_ignored(stored, cfg, ignore)
     cur, errors = scan_tree(roots(cfg), ignore, prev=None if full else prev)
     results = evaluate(cfg, db, compare_states(prev, cur), 'monitor', lg)
-    db.replace_current(cur); db.set_meta('last_scan_at', now_iso())
+    db.update_current(cur, stored); db.set_meta('last_scan_at', now_iso())
     return results
 
 
