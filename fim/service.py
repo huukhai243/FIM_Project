@@ -4,7 +4,7 @@ from pathlib import Path
 from .config import load_config, roots, short, FimError
 from .core import FileState, scan_tree, compare_states, is_ignored, sha256_file
 from .database import FimDB, now_iso
-from .rules import classify, SUSPICIOUS
+from .rules import classify, burst_sizes, SUSPICIOUS
 
 # watchdog (inotify trên Linux) phát cả sự kiện mở/đóng file; chính việc hash file khi quét
 # sẽ sinh ra các sự kiện này => bỏ qua để tránh vòng lặp quét liên tục.
@@ -62,8 +62,9 @@ def _drop_ignored(states, cfg, ignore):
 def evaluate(cfg, db, changes, source, lg=None, record=True):
     allow = db.allow_rules(); results = []
     alert_file = Path(cfg['log_file']).with_name('alerts.log')
-    for ch in changes:
-        v = classify(ch, cfg, allow, batch_size=len(changes)); results.append((ch, v))
+    bursts = burst_sizes(changes, float(cfg.get('mass_change_window_seconds', 60)))
+    for ch, burst in zip(changes, bursts):
+        v = classify(ch, cfg, allow, batch_size=burst); results.append((ch, v))
         if not record: continue
         event_id, alert_id = db.record(ch, v, source)
         if lg:
@@ -202,7 +203,9 @@ def accept(config='config.json', path=None):
                 raise FimError(f'{key} không nằm trong thư mục giám sát nào.')
             p = Path(key)
             if p.is_file():
-                st = p.stat(); db.set_baseline_file(key, FileState(key, sha256_file(p), st.st_size, st.st_mtime_ns, st.st_mode & 0o7777))
+                st = p.stat()
+                db.set_baseline_file(key, FileState(key, sha256_file(p), st.st_size, st.st_mtime_ns, st.st_mode & 0o7777,
+                                                    st.st_uid, st.st_gid))
                 lg.info('Accepted into baseline: %s', short(key))
             else:
                 db.set_baseline_file(key, None); lg.info('Removed from baseline (file no longer exists): %s', short(key))

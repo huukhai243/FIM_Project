@@ -23,5 +23,6 @@
   "suspicious_extensions": [".locked", ".encrypted", ".enc", ".crypt", ".crypto", ".ransom"],
   "suspicious_threshold": 3,
   "mass_change_threshold": 10,
+  "mass_change_window_seconds": 60,
   "work_hours": [7, 19]
 }

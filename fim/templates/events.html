@@ -9,7 +9,7 @@
   <select name="level"><option value="">Mọi mức</option>
     {% for v in ['HIGH', 'MEDIUM', 'LOW'] %}<option {{ 'selected' if f.level == v }}>{{ v }}</option>{% endfor %}</select>
   <select name="event_type"><option value="">Mọi loại</option>
-    {% for v in ['CREATED', 'MODIFIED', 'DELETED', 'MOVED', 'PERMISSION_CHANGED'] %}<option {{ 'selected' if f.event_type == v }}>{{ v }}</option>{% endfor %}</select>
+    {% for v in ['CREATED', 'MODIFIED', 'DELETED', 'MOVED', 'PERMISSION_CHANGED', 'OWNER_CHANGED', 'TIMESTAMP_CHANGED'] %}<option {{ 'selected' if f.event_type == v }}>{{ v }}</option>{% endfor %}</select>
   <select name="source"><option value="">Mọi nguồn</option>
     {% for v in ['monitor', 'scan'] %}<option {{ 'selected' if f.source == v }}>{{ v }}</option>{% endfor %}</select>
   <button class="primary">Lọc</button> <a class="btn" href="{{ url_for('events') }}">Xóa lọc</a>

@@ -1,6 +1,6 @@
 """Phân loại thay đổi hợp lệ / đáng ngờ (heuristic + whitelist)."""
 from __future__ import annotations
-import os
+import bisect, os, time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -11,7 +11,8 @@ BASE_SCORE = {'DELETED': 3, 'MODIFIED': 2, 'MOVED': 2, 'CREATED': 1}
 DEFAULT_SUSPICIOUS_EXT = ['.locked', '.encrypted', '.enc', '.crypt', '.crypto', '.ransom']
 # Dấu hiệu luôn bị cảnh báo kể cả khi file khớp whitelist 'allow'
 # (vd. allow '*.log' cho phép ghi thêm log, nhưng làm rỗng log = xóa dấu vết)
-NON_WHITELISTABLE = {'file truncated to 0 bytes', 'setuid/setgid bit set', 'ransomware-like extension'}
+NON_WHITELISTABLE = {'file truncated to 0 bytes', 'setuid/setgid bit set', 'ransomware-like extension',
+                     'timestamp moved backwards (timestomp)'}
 
 
 @dataclass
@@ -50,14 +51,31 @@ def allow_rule(change: Change, cfg: dict, allow: list[dict]) -> dict | None:
     return None
 
 
+def burst_sizes(changes: list[Change], window_s: float = 60.0) -> list[int]:
+    """Với mỗi thay đổi: số thay đổi (kể cả nó) có thời điểm sửa cách nhau không quá `window_s` giây.
+    Ransomware đặc trưng bởi nhiều file đổi trong thời gian ngắn; đếm cả lô sẽ khiến một lần `scan`
+    đối chiếu baseline sau nhiều ngày coi mọi thay đổi bình thường là "hàng loạt". File bị xóa không còn
+    mtime nên lấy thời điểm phát hiện."""
+    now = time.time_ns(); w = int(window_s * 1e9)
+    ts = [c.new.mtime_ns if c.new else now for c in changes]; order = sorted(ts)
+    return [bisect.bisect_right(order, t + w) - bisect.bisect_left(order, t - w) for t in ts]
+
+
 def classify(change: Change, cfg: dict, allow=(), batch_size=1, now: datetime | None = None) -> Verdict:
     score = 0; reasons = []
     kinds = change.event_type.split('+')
+    # Thời gian sửa bị lùi về quá khứ là dấu hiệu che giấu thay đổi (MITRE ATT&CK T1070.006 Timestomp).
+    # Đổi tên/di chuyển giữ nguyên mtime nên không xét.
+    backdated = bool(change.old and change.new and kinds[0] != 'MOVED' and change.new.mtime_ns < change.old.mtime_ns)
+    if kinds == ['TIMESTAMP_CHANGED'] and not backdated:      # touch: nội dung, quyền, chủ sở hữu giữ nguyên
+        return Verdict(0, 'LOW', LEGITIMATE, ['timestamp updated, content unchanged'])
+    if backdated: score += 4; reasons.append('timestamp moved backwards (timestomp)')
     for k in ('DELETED', 'MODIFIED', 'MOVED', 'CREATED'):
         if k in kinds:
             score += BASE_SCORE[k]; reasons.append({'DELETED': 'file deleted', 'MODIFIED': 'content changed',
                                                     'MOVED': 'file moved/renamed', 'CREATED': 'new file'}[k]); break
     if 'PERMISSION_CHANGED' in kinds: score += 2; reasons.append('permission changed')
+    if 'OWNER_CHANGED' in kinds: score += 3; reasons.append('owner changed')
 
     p = change.path.replace('\\', '/'); name = p.rsplit('/', 1)[-1]; suffix = Path(name).suffix.lower()
     roots = [w['path'] for w in cfg.get('watch_paths', [])]; rel = rel_path(p, roots)

@@ -1,12 +1,15 @@
 from __future__ import annotations
-import sqlite3
+import os, sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from .core import FileState, Change
 
+STATE_COLS = 'path,sha256,size,mtime_ns,mode,uid,gid'
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS baseline(path TEXT PRIMARY KEY, sha256 TEXT, size INTEGER, mtime_ns INTEGER, mode INTEGER);
-CREATE TABLE IF NOT EXISTS current_state(path TEXT PRIMARY KEY, sha256 TEXT, size INTEGER, mtime_ns INTEGER, mode INTEGER);
+CREATE TABLE IF NOT EXISTS baseline(path TEXT PRIMARY KEY, sha256 TEXT, size INTEGER, mtime_ns INTEGER, mode INTEGER,
+    uid INTEGER, gid INTEGER);
+CREATE TABLE IF NOT EXISTS current_state(path TEXT PRIMARY KEY, sha256 TEXT, size INTEGER, mtime_ns INTEGER, mode INTEGER,
+    uid INTEGER, gid INTEGER);
 CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT, path TEXT, event_type TEXT,
     risk_score INTEGER, risk_level TEXT, details TEXT, verdict TEXT, source TEXT, old_path TEXT);
 CREATE TABLE IF NOT EXISTS alerts(id INTEGER PRIMARY KEY AUTOINCREMENT, event_id INTEGER REFERENCES events(id),
@@ -29,20 +32,29 @@ class FimDB:
         self.conn = sqlite3.connect(p, timeout=10, check_same_thread=False); self.conn.row_factory = sqlite3.Row
         self.conn.execute('PRAGMA journal_mode=WAL')   # dashboard đọc song song khi monitor đang ghi
         self.conn.executescript(SCHEMA); self._migrate(); self.conn.commit()
+        if os.name == 'posix':                         # baseline chỉ chủ sở hữu được đọc/ghi
+            try: os.chmod(p, 0o600)
+            except OSError: pass
 
     def _migrate(self):
-        """Thêm cột mới cho DB tạo từ bản v1.0."""
+        """Thêm cột mới cho DB tạo từ phiên bản cũ."""
         cols = {r['name'] for r in self.conn.execute('PRAGMA table_info(events)')}
         for c in ('verdict', 'source', 'old_path'):
             if c not in cols: self.conn.execute(f'ALTER TABLE events ADD COLUMN {c} TEXT')
+        for table in ('baseline', 'current_state'):
+            cols = {r['name'] for r in self.conn.execute(f'PRAGMA table_info({table})')}
+            for c in ('uid', 'gid'):
+                if c not in cols: self.conn.execute(f'ALTER TABLE {table} ADD COLUMN {c} INTEGER')
 
     def close(self): self.conn.close()
 
     # ---- baseline / current state ----
+    @staticmethod
+    def _row(s: FileState): return (s.path, s.sha256, s.size, s.mtime_ns, s.mode, s.uid, s.gid)
+
     def _replace(self, table, states):
         c = self.conn.cursor(); c.execute(f'DELETE FROM {table}')
-        c.executemany(f'INSERT INTO {table}(path,sha256,size,mtime_ns,mode) VALUES(?,?,?,?,?)',
-                      [(s.path, s.sha256, s.size, s.mtime_ns, s.mode) for s in states.values()])
+        c.executemany(f'INSERT INTO {table}({STATE_COLS}) VALUES(?,?,?,?,?,?,?)', [self._row(s) for s in states.values()])
         self.conn.commit()
 
     def replace_baseline(self, s):   # baseline luôn được tạo từ một lần quét đầy đủ
@@ -50,8 +62,8 @@ class FimDB:
     def replace_current(self, s): self._replace('current_state', s)
 
     def _load(self, table):
-        rows = self.conn.execute(f'SELECT path,sha256,size,mtime_ns,mode FROM {table}').fetchall()
-        return {r['path']: FileState(r['path'], r['sha256'], r['size'], r['mtime_ns'], r['mode']) for r in rows}
+        rows = self.conn.execute(f'SELECT {STATE_COLS} FROM {table}').fetchall()
+        return {r['path']: FileState(*r) for r in rows}
 
     def load_baseline(self): return self._load('baseline')
     def load_current(self): return self._load('current_state')
@@ -59,8 +71,7 @@ class FimDB:
     def set_baseline_file(self, path, state: FileState | None):
         self.conn.execute('DELETE FROM baseline WHERE path=?', (path,))
         if state:
-            self.conn.execute('INSERT INTO baseline(path,sha256,size,mtime_ns,mode) VALUES(?,?,?,?,?)',
-                              (state.path, state.sha256, state.size, state.mtime_ns, state.mode))
+            self.conn.execute(f'INSERT INTO baseline({STATE_COLS}) VALUES(?,?,?,?,?,?,?)', self._row(state))
         self.conn.commit()
 
     # ---- meta ----

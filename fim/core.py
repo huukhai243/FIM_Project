@@ -12,12 +12,16 @@ class FileState:
     size: int
     mtime_ns: int
     mode: int
+    uid: int | None = None   # chủ sở hữu; None = chưa ghi nhận (baseline tạo từ phiên bản cũ)
+    gid: int | None = None
 
 
 @dataclass
 class Change:
     path: str
-    event_type: str          # CREATED / MODIFIED / DELETED / MOVED / PERMISSION_CHANGED (có thể ghép bằng '+')
+    # CREATED / DELETED / MOVED, hoặc ghép bằng '+' từ MODIFIED, PERMISSION_CHANGED, OWNER_CHANGED;
+    # TIMESTAMP_CHANGED khi chỉ thời gian sửa thay đổi còn nội dung, quyền, chủ sở hữu giữ nguyên
+    event_type: str
     old: FileState | None
     new: FileState | None
 
@@ -76,7 +80,7 @@ def scan_tree(roots: list[str], ignore=(), prev: dict[str, FileState] | None = N
                         digest = old.sha256
                     else:
                         digest = sha256_file(p)
-                    states[key] = FileState(key, digest, st.st_size, st.st_mtime_ns, st.st_mode & 0o7777)
+                    states[key] = FileState(key, digest, st.st_size, st.st_mtime_ns, st.st_mode & 0o7777, st.st_uid, st.st_gid)
                 except OSError as e:
                     errors.append(f'{key}: {e.strerror or e}')
     return states, errors
@@ -100,11 +104,10 @@ def compare_states(old: dict[str, FileState], new: dict[str, FileState]) -> list
         if p not in moved_from: out.append(Change(p, 'DELETED', old[p], None))
     for p in sorted(a & b):
         o, n = old[p], new[p]
-        content = (o.sha256 != n.sha256 or o.size != n.size)
-        perm = (o.mode != n.mode)
-        if content and perm: typ = 'MODIFIED+PERMISSION_CHANGED'
-        elif content: typ = 'MODIFIED'
-        elif perm: typ = 'PERMISSION_CHANGED'
-        else: continue
-        out.append(Change(p, typ, o, n))
+        kinds = []
+        if o.sha256 != n.sha256 or o.size != n.size: kinds.append('MODIFIED')
+        if o.mode != n.mode: kinds.append('PERMISSION_CHANGED')
+        if None not in (o.uid, n.uid) and (o.uid, o.gid) != (n.uid, n.gid): kinds.append('OWNER_CHANGED')
+        if not kinds and o.mtime_ns != n.mtime_ns: kinds.append('TIMESTAMP_CHANGED')
+        if kinds: out.append(Change(p, '+'.join(kinds), o, n))
     return out

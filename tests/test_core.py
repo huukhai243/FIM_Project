@@ -10,7 +10,8 @@ DAY = datetime(2026, 1, 5, 10, 0)     # trong giờ làm việc
 NIGHT = datetime(2026, 1, 5, 2, 0)
 
 
-def fs(path, sha='a', size=1, mode=0o644): return FileState(path, sha, size, 1, mode)
+def fs(path, sha='a', size=1, mode=0o644, mtime=1, uid=None, gid=None):
+    return FileState(path, sha, size, mtime, mode, uid, gid)
 
 
 class CompareTest(unittest.TestCase):
@@ -25,6 +26,15 @@ class CompareTest(unittest.TestCase):
     def test_moved(self):
         ch = compare_states({'a.txt': fs('a.txt', 'h')}, {'b.locked': fs('b.locked', 'h')})
         self.assertEqual([(c.event_type, c.old.path) for c in ch], [('MOVED', 'a.txt')])
+    def test_owner_changed(self):
+        ch = compare_states({'a': fs('a', uid=1000, gid=1000)}, {'a': fs('a', uid=0, gid=0)})
+        self.assertEqual(ch[0].event_type, 'OWNER_CHANGED')
+    def test_owner_unknown_in_old_baseline_is_not_reported(self):   # baseline tạo từ phiên bản chưa lưu uid/gid
+        self.assertEqual(compare_states({'a': fs('a')}, {'a': fs('a', uid=1000, gid=1000)}), [])
+    def test_timestamp_only(self):
+        self.assertEqual(compare_states({'a': fs('a', mtime=5)}, {'a': fs('a', mtime=9)})[0].event_type, 'TIMESTAMP_CHANGED')
+    def test_content_change_is_not_reported_as_timestamp(self):
+        self.assertEqual(compare_states({'a': fs('a', 'x', mtime=5)}, {'a': fs('a', 'y', mtime=9)})[0].event_type, 'MODIFIED')
     def test_empty_files_not_paired_as_move(self):
         ch = compare_states({'a': fs('a', 'e', size=0)}, {'b': fs('b', 'e', size=0)})
         self.assertEqual(sorted(c.event_type for c in ch), ['CREATED', 'DELETED'])
@@ -72,6 +82,32 @@ class RulesTest(unittest.TestCase):
         ch = Change('/r/home/x', 'PERMISSION_CHANGED', fs('/r/home/x', mode=0o644), fs('/r/home/x', mode=0o4755))
         v = classify(ch, self.cfg, now=DAY)
         self.assertIn('setuid', v.details); self.assertIn('execute permission added', v.details); self.assertEqual(v.level, 'HIGH')
+
+    def test_touch_forward_is_legitimate(self):
+        ch = Change('/r/etc/app.conf', 'TIMESTAMP_CHANGED', fs('/r/etc/app.conf', mtime=5), fs('/r/etc/app.conf', mtime=9))
+        self.assertEqual(classify(ch, self.cfg, now=DAY).verdict, 'LEGITIMATE')
+
+    def test_timestamp_moved_backwards_is_suspicious_even_if_allowed(self):
+        ch = Change('/r/home/a.log', 'TIMESTAMP_CHANGED', fs('/r/home/a.log', mtime=9), fs('/r/home/a.log', mtime=5))
+        v = classify(ch, self.cfg, [{'pattern': '*.log', 'events': '*'}], now=DAY)
+        self.assertEqual(v.verdict, 'SUSPICIOUS'); self.assertIn('timestomp', v.details); self.assertIn('overridden', v.details)
+
+    def test_modified_and_backdated_is_flagged(self):
+        ch = Change('/r/home/n.txt', 'MODIFIED', fs('/r/home/n.txt', 'x', mtime=9), fs('/r/home/n.txt', 'y', mtime=5))
+        v = classify(ch, self.cfg, now=DAY)
+        self.assertEqual(v.verdict, 'SUSPICIOUS'); self.assertIn('timestomp', v.details)
+
+    def test_burst_counts_changes_close_in_time_only(self):
+        from fim.rules import burst_sizes
+        spread = [Change(f'/r/home/{i}', 'CREATED', None, fs(f'/r/home/{i}', mtime=i * 120 * 10**9)) for i in range(12)]
+        same = [Change(f'/r/home/{i}.enc', 'CREATED', None, fs(f'/r/home/{i}.enc', mtime=7 * 10**9)) for i in range(12)]
+        self.assertEqual(set(burst_sizes(spread)), {1})
+        self.assertEqual(set(burst_sizes(same)), {12})
+
+    def test_owner_change_is_suspicious(self):
+        ch = Change('/r/home/x', 'OWNER_CHANGED', fs('/r/home/x', uid=1000, gid=1000), fs('/r/home/x', uid=0, gid=0))
+        v = classify(ch, self.cfg, now=DAY)
+        self.assertEqual(v.verdict, 'SUSPICIOUS'); self.assertIn('owner changed', v.details)
 
     def test_hidden_file(self):
         v = classify(Change('/r/home/.backdoor', 'CREATED', None, fs('/r/home/.backdoor')), self.cfg, now=DAY)
@@ -168,6 +204,35 @@ class ServiceTest(_TempProject):
         db.close()                                    # mọi truy vấn sau đây sẽ lỗi
         service._process_safely(cfg, db, lg)          # phải ghi log lỗi, không được ném ngoại lệ
         self.assertIn('Quét thất bại', (self.t / 'fim.log').read_text(encoding='utf-8'))
+
+    def test_audit_after_many_spread_out_changes_is_not_mass_change(self):
+        """scan đối chiếu baseline sau nhiều giờ: 12 ghi chú sửa rải rác không phải 'hàng loạt'."""
+        service.initialize(str(self.cfgp))
+        t0 = time.time()
+        for i in range(12):
+            p = self.t / 'w' / 'home' / f'note{i}.txt'; p.write_text('x')
+            os.utime(p, (t0 + i * 600, t0 + i * 600))      # mỗi file cách nhau 10 phút
+        _, results, _ = service.scan_baseline(str(self.cfgp))
+        self.assertEqual(len(results), 12)
+        self.assertTrue(all(v.verdict == 'LEGITIMATE' for _, v in results), [v.details for _, v in results])
+
+    def test_old_database_is_upgraded_without_false_owner_changes(self):
+        import sqlite3
+        db_path = self.t / 'old.db'
+        con = sqlite3.connect(db_path)                    # CSDL phiên bản cũ: bảng trạng thái chưa có uid/gid
+        con.execute('CREATE TABLE baseline(path TEXT PRIMARY KEY, sha256 TEXT, size INTEGER, mtime_ns INTEGER, mode INTEGER)')
+        con.execute("INSERT INTO baseline VALUES('/w/a', 'h', 1, 5, 420)"); con.commit(); con.close()
+        db = FimDB(db_path)
+        try:
+            old = db.load_baseline()
+            self.assertIsNone(old['/w/a'].uid)
+            self.assertEqual(compare_states(old, {'/w/a': fs('/w/a', 'h', mode=420, mtime=5, uid=1000, gid=1000)}), [])
+        finally: db.close()
+
+    @unittest.skipUnless(os.name == 'posix', 'quyền Unix chỉ có trên Linux')
+    def test_database_file_readable_by_owner_only(self):
+        service.initialize(str(self.cfgp))
+        self.assertEqual(os.stat(self.t / 'fim.db').st_mode & 0o777, 0o600)
 
     def test_watch_path_without_path_key(self):
         self.cfgp.write_text(json.dumps({'watch_paths': [{'label': 'thiếu path'}]}))
