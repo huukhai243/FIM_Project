@@ -1,16 +1,12 @@
 """Web dashboard: lịch sử thay đổi, alert, whitelist, phạm vi giám sát."""
 from __future__ import annotations
-import hashlib, os, secrets, time
-from datetime import timedelta
+import os, secrets
 from pathlib import Path
 from flask import Flask, g, render_template, request, redirect, url_for, flash, session
-from werkzeug.security import check_password_hash
 from .config import load_config, FimError, short
-from .integrity import DESCRIPTIONS
 from .service import open_db, accept
 
 PAGE_SIZE = 50
-MAX_FAILS, LOCK_SECONDS = 5, 60      # sai mật khẩu 5 lần liên tiếp -> khóa đăng nhập từ IP đó 60 giây
 
 
 def create_app(config='config.json') -> Flask:
@@ -18,9 +14,7 @@ def create_app(config='config.json') -> Flask:
     app = Flask(__name__)
     # ký cookie phiên (flash message, CSRF token); sinh ngẫu nhiên mỗi lần chạy, có thể đặt cố định qua biến môi trường
     app.secret_key = os.environ.get('FIM_SECRET_KEY') or os.urandom(24)
-    app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Strict',
-                      PERMANENT_SESSION_LIFETIME=timedelta(hours=8))
-    fails: dict[str, tuple[int, float]] = {}
+    app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Strict')
 
     def db():
         if 'db' not in g: g.db = open_db(cfg)
@@ -47,53 +41,6 @@ def create_app(config='config.json') -> Flask:
                 flash('Phiên làm việc không hợp lệ hoặc đã hết hạn, thao tác chưa được thực hiện. Hãy thử lại.', 'error')
                 return redirect(url_for('overview'))
 
-    # Đăng nhập: bật khi có mật khẩu - biến môi trường FIM_DASHBOARD_PASSWORD, hoặc hash đặt bằng `main.py passwd`.
-    # Không đặt mật khẩu thì dashboard mở như trước (chỉ nên chạy ở 127.0.0.1).
-    def password_source():
-        return os.environ.get('FIM_DASHBOARD_PASSWORD') or db().get_meta('dashboard_password')
-
-    def auth_marker():
-        """Gắn phiên đăng nhập với mật khẩu hiện tại: đổi mật khẩu thì mọi phiên cũ hết hiệu lực."""
-        src = password_source()
-        return hashlib.sha256(src.encode('utf-8')).hexdigest()[:16] if src else None
-
-    def password_ok(pw: str) -> bool:
-        env = os.environ.get('FIM_DASHBOARD_PASSWORD')
-        if env: return secrets.compare_digest(env.encode('utf-8'), pw.encode('utf-8'))
-        h = db().get_meta('dashboard_password')
-        return bool(h) and check_password_hash(h, pw)
-
-    @app.before_request
-    def _require_login():
-        if request.endpoint in ('login', 'static'): return
-        marker = auth_marker()
-        if marker and session.get('auth') != marker:
-            return redirect(url_for('login', next=request.full_path if request.method == 'GET' else None))
-
-    @app.route('/login', methods=['GET', 'POST'])
-    def login():
-        if not auth_marker(): return redirect(url_for('overview'))
-        if request.method == 'POST':
-            ip = request.remote_addr or '?'; n, until = fails.get(ip, (0, 0.0))
-            if until > time.time():
-                flash(f'Sai mật khẩu quá {MAX_FAILS} lần. Thử lại sau {int(until - time.time()) + 1} giây.', 'error')
-            elif password_ok(request.form.get('password', '')):
-                fails.pop(ip, None); session.clear()        # phiên mới sau khi đăng nhập (chống session fixation)
-                session['auth'] = auth_marker(); session.permanent = True
-                nxt = request.args.get('next') or ''
-                return redirect(nxt if nxt.startswith('/') and not nxt.startswith('//') else url_for('overview'))
-            else:
-                n += 1; fails[ip] = (0, time.time() + LOCK_SECONDS) if n >= MAX_FAILS else (n, 0.0)
-                flash('Sai mật khẩu.', 'error')
-        return render_template('login.html')
-
-    @app.post('/logout')
-    def logout():
-        session.clear(); return redirect(url_for('login'))
-
-    def integrity():
-        return {t: (st, DESCRIPTIONS.get(st, '')) for t, st in db().verify_integrity().items()}
-
     @app.teardown_appcontext
     def _close(_exc):
         d = g.pop('db', None)
@@ -101,13 +48,13 @@ def create_app(config='config.json') -> Flask:
 
     @app.context_processor
     def _inject():
-        if request.endpoint in ('static', 'login'): return {'hide_nav': True}
-        return {'auth_enabled': bool(auth_marker()), 'new_alerts': db().conn.execute("SELECT COUNT(*) FROM alerts WHERE status='NEW'").fetchone()[0]}
+        if request.endpoint == 'static': return {}
+        return {'new_alerts': db().conn.execute("SELECT COUNT(*) FROM alerts WHERE status='NEW'").fetchone()[0]}
 
     @app.route('/')
     def overview():
         st = db().stats()
-        return render_template('overview.html', st=st, alerts=db().alerts('NEW', 8), cfg=cfg, integrity=integrity(),
+        return render_template('overview.html', st=st, alerts=db().alerts('NEW', 8), cfg=cfg,
                                max_day=max([r['total'] for r in st['per_day']] or [1]))
 
     @app.route('/events')
@@ -172,7 +119,7 @@ def create_app(config='config.json') -> Flask:
             r = w['path'].rstrip('/') + '/'
             files = [s for k, s in base.items() if k.startswith(r)]
             items.append(dict(w, exists=Path(w['path']).is_dir(), files=len(files), size=sum(s.size for s in files)))
-        return render_template('scope.html', items=items, st=db().stats(), cfg=cfg, integrity=integrity())
+        return render_template('scope.html', items=items, st=db().stats(), cfg=cfg)
 
     @app.post('/baseline/accept')
     def baseline_accept():

@@ -3,7 +3,6 @@ import os, sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from .core import FileState, Change
-from .integrity import Signer, OK
 
 STATE_COLS = 'path,sha256,size,mtime_ns,mode,uid,gid'
 SCHEMA = """
@@ -28,9 +27,7 @@ def now_iso():
 
 
 class FimDB:
-    def __init__(self, db_path, signer: Signer | None = None):
-        # signer = None: không ký/kiểm tra chữ ký (dùng trong test, công cụ đo đạc)
-        self.signer = signer
+    def __init__(self, db_path):
         p = Path(db_path); p.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(p, timeout=10, check_same_thread=False); self.conn.row_factory = sqlite3.Row
         self.conn.execute('PRAGMA journal_mode=WAL')   # dashboard đọc song song khi monitor đang ghi
@@ -59,7 +56,6 @@ class FimDB:
         c = self.conn.cursor(); c.execute(f'DELETE FROM {table}')
         c.executemany(f'INSERT INTO {table}({STATE_COLS}) VALUES(?,?,?,?,?,?,?)', [self._row(s) for s in states.values()])
         self.conn.commit()
-        if table == 'baseline': self._resign('baseline')
 
     def replace_baseline(self, s):   # baseline luôn được tạo từ một lần quét đầy đủ
         self._replace('baseline', s); ts = now_iso(); self.set_meta('baseline_at', ts); self.set_meta('last_scan_at', ts)
@@ -86,33 +82,7 @@ class FimDB:
         self.conn.execute('DELETE FROM baseline WHERE path=?', (path,))
         if state:
             self.conn.execute(f'INSERT INTO baseline({STATE_COLS}) VALUES(?,?,?,?,?,?,?)', self._row(state))
-        self.conn.commit(); self._resign('baseline')
-
-    # ---- chữ ký HMAC cho baseline / whitelist ----
-    def _resign(self, table):
-        if self.signer: self.set_meta(f'{table}_hmac', self.signer.sign(self.conn, table))
-
-    def sign_all(self):
-        """Ký lại cả hai bảng (sau khi nâng cấp từ phiên bản cũ, hoặc sau khi quản trị viên đã kiểm tra CSDL)."""
-        for t in ('baseline', 'whitelist'): self._resign(t)
-
-    def verify_integrity(self) -> dict[str, str]:
-        """{'baseline': OK|TAMPERED|UNSIGNED|NO_KEY, 'whitelist': ...}. Bảng rỗng chưa từng ký coi là OK."""
-        if not self.signer: return {}
-        out = {}
-        for t in ('baseline', 'whitelist'):
-            stored = self.get_meta(f'{t}_hmac')
-            empty = not self.conn.execute(f'SELECT 1 FROM {t} LIMIT 1').fetchone()
-            out[t] = OK if not stored and empty and not (t == 'baseline' and self.get_meta('baseline_at'))                 else self.signer.verify(self.conn, t, stored)
-        return out
-
-    def add_system_alert(self, path, severity, message):
-        """Alert không gắn với thay đổi file (vd. CSDL baseline bị sửa). Không tạo trùng khi alert cũ chưa xử lý."""
-        if self.conn.execute("SELECT 1 FROM alerts WHERE status='NEW' AND path=? AND message=?", (path, message)).fetchone():
-            return None
-        aid = self.conn.execute('INSERT INTO alerts(event_id,timestamp,path,severity,message) VALUES(NULL,?,?,?,?)',
-                                (now_iso(), path, severity, message)).lastrowid
-        self.conn.commit(); return aid
+        self.conn.commit()
 
     # ---- meta ----
     def set_meta(self, key, value):
@@ -187,14 +157,10 @@ class FimDB:
         if kind not in ('ignore', 'allow'): raise ValueError('kind must be ignore or allow')
         cur = self.conn.execute('INSERT OR IGNORE INTO whitelist(pattern,kind,events,note,created_at) VALUES(?,?,?,?,?)',
                                 (pattern.strip(), kind, (events or '*').upper().replace(' ', ''), note, now_iso()))
-        self.conn.commit()
-        if cur.rowcount: self._resign('whitelist')
-        return cur.rowcount
+        self.conn.commit(); return cur.rowcount
 
     def whitelist_remove(self, wid):
-        n = self.conn.execute('DELETE FROM whitelist WHERE id=?', (wid,)).rowcount; self.conn.commit()
-        if n: self._resign('whitelist')
-        return n
+        n = self.conn.execute('DELETE FROM whitelist WHERE id=?', (wid,)).rowcount; self.conn.commit(); return n
 
     def ignore_patterns(self): return [r['pattern'] for r in self.whitelist('ignore')]
     def allow_rules(self): return [dict(r) for r in self.whitelist('allow')]

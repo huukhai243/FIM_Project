@@ -4,9 +4,7 @@ from pathlib import Path
 from .config import load_config, roots, short, FimError
 from .core import FileState, scan_tree, compare_states, is_ignored, sha256_file
 from .database import FimDB, now_iso
-from .integrity import Signer, OK, DESCRIPTIONS
 from .rules import classify, burst_sizes, SUSPICIOUS
-from . import notify
 
 # watchdog (inotify trên Linux) phát cả sự kiện mở/đóng file; chính việc hash file khi quét
 # sẽ sinh ra các sự kiện này => bỏ qua để tránh vòng lặp quét liên tục.
@@ -39,23 +37,7 @@ def logger_for(path):
 
 
 def open_db(cfg) -> FimDB:
-    db = FimDB(cfg['database'], Signer.from_cfg(cfg)); db.seed_whitelist(cfg); return db
-
-
-def check_integrity(cfg, db, lg=None, alert=True) -> dict[str, str]:
-    """Kiểm tra chữ ký baseline/whitelist. Trả về các bảng không đạt {bảng: trạng thái}; nếu `alert` thì tạo
-    alert HIGH (không trùng lặp khi alert cũ chưa xử lý), ghi log CRITICAL và gửi thông báo."""
-    bad = {t: st for t, st in db.verify_integrity().items() if st != OK}
-    if bad and alert:
-        items = []
-        for t, st in bad.items():
-            msg = f'INTEGRITY {t} - CSDL {t}: {DESCRIPTIONS[st]}'
-            aid = db.add_system_alert(cfg['database'], 'HIGH', msg)
-            if lg: lg.critical('ALERT%s [INTEGRITY/%s] %s: %s', f' #{aid}' if aid else '', st, t, DESCRIPTIONS[st])
-            if aid: items.append({'alert_id': aid, 'path': cfg['database'], 'event': f'INTEGRITY_{st}', 'severity': 'HIGH',
-                                  'score': '-', 'reasons': [f'{t}: {DESCRIPTIONS[st]}']})
-        notify.send(cfg, items, lg)
-    return bad
+    db = FimDB(cfg['database']); db.seed_whitelist(cfg); return db
 
 
 def _require_baseline(db):
@@ -78,7 +60,7 @@ def _drop_ignored(states, cfg, ignore):
 
 
 def evaluate(cfg, db, changes, source, lg=None, record=True):
-    allow = db.allow_rules(); results = []; to_notify = []
+    allow = db.allow_rules(); results = []
     alert_file = Path(cfg['log_file']).with_name('alerts.log')
     bursts = burst_sizes(changes, float(cfg.get('mass_change_window_seconds', 60)))
     for ch, burst in zip(changes, bursts):
@@ -94,19 +76,17 @@ def evaluate(cfg, db, changes, source, lg=None, record=True):
             else:
                 lg.info(msg, *args)
         if alert_id:   # JSON lines - dễ đẩy sang SIEM (Wazuh, ELK...)
-            item = {'alert_id': alert_id, 'event_id': event_id, 'time': now_iso(), 'path': ch.path,
-                    'event': ch.event_type, 'severity': v.level, 'score': v.score, 'reasons': v.reasons}
-            to_notify.append(item)
-            with alert_file.open('a', encoding='utf-8') as f: f.write(json.dumps(item, ensure_ascii=False) + '\n')
-    # một tin nhắn cho cả lần quét; monitor gửi nền để mạng chậm không làm trễ lần quét sau
-    notify.send(cfg, to_notify, lg, background=(source == 'monitor'))
+            with alert_file.open('a', encoding='utf-8') as f:
+                f.write(json.dumps({'alert_id': alert_id, 'event_id': event_id, 'time': now_iso(), 'path': ch.path,
+                                    'event': ch.event_type, 'severity': v.level, 'score': v.score,
+                                    'reasons': v.reasons}, ensure_ascii=False) + '\n')
     return results
 
 
 def initialize(config='config.json'):
     cfg = load_config(config); lg = logger_for(cfg['log_file']); db = open_db(cfg)
     try:
-        s, errors = _full_scan(cfg, db, lg); db.replace_baseline(s); db.replace_current(s); db.sign_all()
+        s, errors = _full_scan(cfg, db, lg); db.replace_baseline(s); db.replace_current(s)
         lg.info('Baseline initialized: %d file(s) in %d watch path(s)', len(s), len(cfg['watch_paths']))
         return len(s), errors
     finally: db.close()
@@ -117,7 +97,6 @@ def scan_baseline(config='config.json', record=False):
     cfg = load_config(config); db = open_db(cfg); lg = logger_for(cfg['log_file']) if record else None
     try:
         _require_baseline(db)
-        if record: check_integrity(cfg, db, lg)
         cur, errors = _full_scan(cfg, db)
         base = _drop_ignored(db.load_baseline(), cfg, db.ignore_patterns())
         results = evaluate(cfg, db, compare_states(base, cur), 'scan', lg, record)
@@ -160,13 +139,6 @@ def monitor(config='config.json'):
         watch = [r for r in roots(cfg) if Path(r).is_dir()]
         for r in set(roots(cfg)) - set(watch): lg.warning('Watch path missing: %s', r)
         full_every = float(cfg.get('full_scan_interval_seconds', 600))
-        check_integrity(cfg, db, lg)
-        if notify.channels(cfg): lg.info('Gửi cảnh báo qua: %s', ', '.join(notify.channels(cfg)))
-
-        def full_scan():   # quét toàn bộ định kỳ + kiểm tra chữ ký CSDL
-            _process_safely(cfg, db, lg, full=True)
-            try: check_integrity(cfg, db, lg)
-            except Exception: lg.exception('Kiểm tra toàn vẹn CSDL thất bại')
         # Bỏ qua sự kiện do chính FIM ghi DB/log (tránh vòng lặp nếu DB/log nằm trong thư mục giám sát).
         # Chỉ so khớp đúng các file này (+ hậu tố -wal/-shm/.1...), không bỏ qua cả thư mục chứa chúng.
         log = Path(cfg['log_file'])
@@ -196,7 +168,7 @@ def monitor(config='config.json'):
                     time.sleep(0.2); now = time.time()
                     # Hạ cờ dirty TRƯỚC khi quét: sự kiện xảy ra trong lúc quét sẽ được xử lý ở vòng sau
                     if now - last_full >= full_every:
-                        h.dirty = False; full_scan(); last_full = time.time()
+                        h.dirty = False; _process_safely(cfg, db, lg, full=True); last_full = time.time()
                     elif scan_due(now, h.dirty, h.first, h.last, debounce, max_wait):
                         h.dirty = False; _process_safely(cfg, db, lg)
             except KeyboardInterrupt: lg.info('Monitoring stopped.')
@@ -206,8 +178,9 @@ def monitor(config='config.json'):
             lg.warning('%s; polling mỗi %.1fs', 'force_polling=true' if cfg.get('force_polling') else 'watchdog chưa được cài', delay)
             try:
                 while True:
-                    if time.time() - last_full >= full_every: full_scan(); last_full = time.time()
-                    else: _process_safely(cfg, db, lg)
+                    full = time.time() - last_full >= full_every
+                    _process_safely(cfg, db, lg, full=full)
+                    if full: last_full = time.time()
                     time.sleep(delay)
             except KeyboardInterrupt: lg.info('Monitoring stopped.')
     finally: db.close()
@@ -220,7 +193,7 @@ def accept(config='config.json', path=None):
     try:
         _require_baseline(db)
         if path is None:
-            s, _ = _full_scan(cfg, db, lg); db.replace_baseline(s); db.replace_current(s); db.sign_all()
+            s, _ = _full_scan(cfg, db, lg); db.replace_baseline(s); db.replace_current(s)
             lg.info('Accepted current state as new baseline: %d file(s)', len(s)); return len(s)
         paths = [path] if isinstance(path, (str, os.PathLike)) else list(path)
         known = set(db.load_baseline()) | set(db.load_current())
@@ -237,20 +210,4 @@ def accept(config='config.json', path=None):
             else:
                 db.set_baseline_file(key, None); lg.info('Removed from baseline (file no longer exists): %s', short(key))
         return len(paths)
-    finally: db.close()
-
-
-def sign(config='config.json'):
-    """Ký lại baseline + whitelist hiện có trong CSDL (sau khi nâng cấp từ bản cũ, hoặc sau khi đã kiểm tra CSDL).
-    Trả về trạng thái kiểm tra trước khi ký."""
-    cfg = load_config(config); lg = logger_for(cfg['log_file']); db = open_db(cfg)
-    try:
-        before = db.verify_integrity(); db.sign_all()
-        lg.warning('Đã ký lại CSDL (trạng thái trước đó: %s)', before); return before
-    finally: db.close()
-
-
-def integrity_status(config='config.json') -> dict[str, str]:
-    cfg = load_config(config); db = open_db(cfg)
-    try: return db.verify_integrity()
     finally: db.close()

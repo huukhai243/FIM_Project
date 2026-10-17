@@ -26,17 +26,4 @@
     <button class="danger">Chấp nhận trạng thái hiện tại làm baseline mới</button>
   </form>
 </div>
-<div class="card">
-  <h2>Toàn vẹn CSDL (chữ ký HMAC-SHA256)</h2>
-  <table>
-    <tr><th>Bảng</th><th>Trạng thái</th><th>Ý nghĩa</th></tr>
-    {% for t, (st, desc) in integrity.items() %}
-    <tr><td><code>{{ t }}</code></td>
-      <td><span class="badge {{ 'LOW' if st == 'OK' else 'HIGH' }}">{{ st }}</span></td>
-      <td class="small">{{ desc or 'chữ ký khớp - bảng chỉ được sửa qua FIM' }}</td></tr>
-    {% endfor %}
-  </table>
-  <p class="muted small">Khóa ký: biến môi trường <code>FIM_HMAC_KEY</code> hoặc file <span class="path">{{ cfg.integrity_key_file|short }}</span>.
-    Monitor kiểm tra lại mỗi lần quét toàn bộ định kỳ.</p>
-</div>
 {% endblock %}

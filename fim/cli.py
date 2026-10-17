@@ -1,18 +1,8 @@
 from __future__ import annotations
-import argparse, getpass, os, sys
+import argparse
 from pathlib import Path
 from .config import load_config, FimError, short
-from .integrity import OK, DESCRIPTIONS
-from .service import initialize, scan_baseline, monitor, accept, open_db, sign, integrity_status
-from . import notify
-
-
-def _utf8_console():
-    """Console Windows (cp1252/cp437) hoặc khi chuyển hướng output ra file/pipe không mã hóa được tiếng Việt
-    -> UnicodeEncodeError. Ép stdout/stderr dùng UTF-8."""
-    for st in (sys.stdout, sys.stderr):
-        try: st.reconfigure(encoding='utf-8', errors='replace')
-        except (AttributeError, ValueError): pass
+from .service import initialize, scan_baseline, monitor, accept, open_db
 
 
 def show(results, errors=()):
@@ -95,45 +85,7 @@ def cmd_scope(args):
     finally: db.close()
 
 
-def print_integrity(status, quiet_ok=False):
-    bad = {t: st for t, st in status.items() if st != OK}
-    if not bad:
-        if not quiet_ok: print('Toàn vẹn CSDL: OK (' + ', '.join(status) + ')')
-        return True
-    for t, st in bad.items(): print(f'!! CẢNH BÁO toàn vẹn CSDL [{st}] bảng {t}: {DESCRIPTIONS[st]}')
-    print('   Nếu đây là CSDL từ phiên bản cũ (hoặc đã kiểm tra và tin tưởng nội dung): python main.py sign')
-    return False
-
-
-def cmd_passwd(args):
-    pw = args.password if args.password is not None else getpass.getpass('Mật khẩu dashboard mới (để trống = bỏ mật khẩu): ')
-    if pw and args.password is None and getpass.getpass('Nhập lại: ') != pw: raise FimError('Hai lần nhập không khớp.')
-    if pw and len(pw) < 8: raise FimError('Mật khẩu cần ít nhất 8 ký tự.')
-    cfg, db = _db(args)
-    try:
-        if pw:
-            from werkzeug.security import generate_password_hash
-            db.set_meta('dashboard_password', generate_password_hash(pw)); print('Đã đặt mật khẩu dashboard.')
-        else:
-            db.conn.execute("DELETE FROM meta WHERE key='dashboard_password'"); db.conn.commit()
-            print('Đã bỏ mật khẩu dashboard.')
-        if os.environ.get('FIM_DASHBOARD_PASSWORD'): print('Lưu ý: FIM_DASHBOARD_PASSWORD đang được đặt và sẽ được ưu tiên.')
-    finally: db.close()
-
-
-def cmd_notify_test(args):
-    cfg = load_config(args.config); chans = notify.channels(cfg)
-    if not chans: raise FimError('Chưa cấu hình kênh nào (khối "notify" trong config hoặc biến môi trường FIM_*).')
-    import logging
-    lg = logging.getLogger('fim.notify-test'); lg.addHandler(logging.StreamHandler()); lg.setLevel(logging.INFO)
-    item = {'path': cfg['watch_paths'][0]['path'] + '/fim_test.conf', 'event': 'TEST', 'severity': 'HIGH', 'score': 0,
-            'reasons': ['tin nhắn thử từ "python main.py notify-test"']}
-    notify.send(cfg, [item], lg)
-    print('Kênh: ' + ', '.join(chans))
-
-
 def main():
-    _utf8_console()
     p = argparse.ArgumentParser(description='Lightweight File Integrity Monitoring (FIM)')
     p.add_argument('--config', default='config.json')
     sub = p.add_subparsers(dest='cmd', required=True)
@@ -152,10 +104,6 @@ def main():
     wa.add_argument('--events', default='*', help='vd: MODIFIED,CREATED (chỉ dùng cho allow)'); wa.add_argument('--note')
     wr = ws.add_parser('remove'); wr.add_argument('id', type=int)
     sub.add_parser('scope', help='các thư mục đang giám sát')
-    sub.add_parser('verify', help='kiểm tra chữ ký HMAC của baseline/whitelist trong CSDL')
-    sub.add_parser('sign', help='ký lại baseline/whitelist (sau khi nâng cấp từ bản cũ)')
-    pw = sub.add_parser('passwd', help='đặt mật khẩu dashboard'); pw.add_argument('--password', help='không hỏi (dùng trong script/Docker)')
-    sub.add_parser('notify-test', help='gửi thử cảnh báo qua các kênh đã cấu hình')
     d = sub.add_parser('dashboard', help='web dashboard'); d.add_argument('--host', default='127.0.0.1'); d.add_argument('--port', type=int, default=5000)
     args = p.parse_args()
 
@@ -164,7 +112,6 @@ def main():
             n, errors = initialize(args.config); print(f'Baseline created successfully for {n} file(s).')
             if errors: print(f'{len(errors)} path(s) skipped (see log).')
         elif args.cmd == 'scan':
-            print_integrity(integrity_status(args.config), quiet_ok=True)
             cfg, results, errors = scan_baseline(args.config, args.record); show(results, errors)
         elif args.cmd == 'monitor': monitor(args.config)
         elif args.cmd == 'events': cmd_events(args)
@@ -175,20 +122,8 @@ def main():
             print('Current state accepted as the new baseline.' if args.all else f'Baseline updated for {args.path}.')
         elif args.cmd == 'whitelist': cmd_whitelist(args)
         elif args.cmd == 'scope': cmd_scope(args)
-        elif args.cmd == 'verify':
-            if not print_integrity(integrity_status(args.config)): raise SystemExit(2)
-        elif args.cmd == 'sign':
-            before = sign(args.config)
-            print('Đã ký lại CSDL. Trạng thái trước đó: ' + ', '.join(f'{t}={st}' for t, st in before.items()))
-        elif args.cmd == 'passwd': cmd_passwd(args)
-        elif args.cmd == 'notify-test': cmd_notify_test(args)
         elif args.cmd == 'dashboard':
             from .dashboard import create_app
-            cfg, db = _db(args)
-            try: has_pw = bool(os.environ.get('FIM_DASHBOARD_PASSWORD') or db.get_meta('dashboard_password'))
-            finally: db.close()
-            if not has_pw and args.host not in ('127.0.0.1', 'localhost', '::1'):
-                print(f'CẢNH BÁO: dashboard lắng nghe {args.host} nhưng chưa có mật khẩu. Đặt bằng: python main.py passwd')
             print(f'Dashboard: http://{args.host}:{args.port}  (Ctrl+C để dừng)')
             create_app(args.config).run(host=args.host, port=args.port, debug=False)
     except FimError as ex:

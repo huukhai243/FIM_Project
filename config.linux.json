@@ -30,12 +30,5 @@
   "suspicious_threshold": 3,
   "mass_change_threshold": 20,
   "mass_change_window_seconds": 60,
-  "work_hours": [7, 19],
-
-  "notify": {
-    "min_level": "HIGH",
-    "telegram": {"bot_token": "", "chat_id": ""},
-    "email": {"smtp_host": "", "smtp_port": 587, "starttls": true, "username": "", "from": "", "to": []},
-    "webhook": {"url": ""}
-  }
+  "work_hours": [7, 19]
 }

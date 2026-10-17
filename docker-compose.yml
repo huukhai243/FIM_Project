@@ -4,16 +4,8 @@
 
 x-fim: &fim
   build: .
-  image: fim-project:2.1
+  image: fim-project:2.0
   stop_signal: SIGINT          # Ctrl+C -> monitor dừng gọn gàng, đóng DB
-  # Bí mật đọc từ biến môi trường của máy host hoặc file .env cạnh file này (để trống = tắt tính năng)
-  environment:
-    FIM_DASHBOARD_PASSWORD: ${FIM_DASHBOARD_PASSWORD:-}
-    FIM_HMAC_KEY: ${FIM_HMAC_KEY:-}            # trống: dùng khóa tự sinh data/fim.key trong volume fim-data
-    FIM_TELEGRAM_TOKEN: ${FIM_TELEGRAM_TOKEN:-}
-    FIM_TELEGRAM_CHAT_ID: ${FIM_TELEGRAM_CHAT_ID:-}
-    FIM_SMTP_PASSWORD: ${FIM_SMTP_PASSWORD:-}
-    FIM_WEBHOOK_URL: ${FIM_WEBHOOK_URL:-}
   volumes:
     - fim-data:/app/data       # SQLite: baseline, events, alerts, whitelist
     - fim-logs:/app/logs       # fim.log, alerts.log

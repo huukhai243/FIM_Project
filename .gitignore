@@ -12,8 +12,6 @@ logs/
 *.db
 *.db-wal
 *.db-shm
-*.key
-.env
 
 # File zip nộp bài (tạo bằng pack.ps1)
 dist/
