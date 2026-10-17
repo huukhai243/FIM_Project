@@ -1,4 +1,4 @@
-# FIM Project v2.0
+# FIM Project v2.1
 
 **Đề tài 5:** Hệ thống giám sát toàn vẹn file & phát hiện thay đổi bất thường (File Integrity Monitoring - FIM)
 
@@ -14,6 +14,41 @@
 | 3 | Scope theo thư mục hệ thống | Nhiều `watch_paths`, đánh dấu `critical`; có sẵn `config.linux.json` cho `/etc`, `/bin`, `/usr/bin`, `/boot`... | `config*.json` |
 | 3 | Quản lý whitelist | CLI `whitelist add/remove/list` + trang Whitelist trên dashboard | `fim/cli.py`, `fim/dashboard.py` |
 | 3 | Dashboard lịch sử thay đổi | Web Flask: tổng quan, biểu đồ, lịch sử có bộ lọc, alert, whitelist, phạm vi | `fim/dashboard.py`, `fim/templates/` |
+
+## Mở rộng trong v2.1
+| Tính năng | Mô tả | Module |
+|---|---|---|
+| Gửi cảnh báo ra ngoài | Telegram, email (SMTP), webhook (Slack/Discord/SIEM). Mỗi lần quét gom thành **một** tin nhắn; lọc theo `min_level`; lỗi mạng chỉ ghi log, không làm dừng monitor | `fim/notify.py` |
+| Toàn vẹn chính CSDL | Bảng `baseline` và `whitelist` được ký HMAC-SHA256. Sửa thẳng file SQLite (giả hash cho khớp file đã bị sửa, thêm rule `ignore *`) → alert HIGH `INTEGRITY`. Monitor kiểm tra lúc khởi động và mỗi lần quét toàn bộ | `fim/integrity.py` |
+| Đăng nhập dashboard | Mật khẩu (hash scrypt, hoặc biến môi trường), khóa 60 giây sau 5 lần sai, phiên 8 giờ, đổi mật khẩu thì phiên cũ hết hiệu lực | `fim/dashboard.py` |
+| Sửa lỗi tiếng Việt trên Windows | CLI không còn `UnicodeEncodeError` khi console dùng cp1252 hoặc output bị chuyển hướng/pipe | `fim/cli.py` |
+
+### Cấu hình gửi cảnh báo
+Khối `notify` trong `config.json` (để trống = tắt kênh đó). Bí mật nên đặt qua biến môi trường thay vì ghi vào file:
+
+| Kênh | Config | Biến môi trường |
+|---|---|---|
+| Telegram | `telegram.bot_token`, `telegram.chat_id` | `FIM_TELEGRAM_TOKEN`, `FIM_TELEGRAM_CHAT_ID` |
+| Email | `email.smtp_host`, `smtp_port` (465 = SSL, khác = STARTTLS), `username`, `from`, `to` | `FIM_SMTP_PASSWORD` |
+| Webhook | `webhook.url` (POST JSON: `text`, `content`, `title`, `alerts`) | `FIM_WEBHOOK_URL` |
+
+`min_level`: mức thấp nhất được gửi (`LOW` / `MEDIUM` / `HIGH`). Thử cấu hình: `python main.py notify-test`.
+
+Telegram: tạo bot bằng [@BotFather](https://t.me/BotFather) để lấy token, nhắn cho bot một tin rồi mở `https://api.telegram.org/bot<TOKEN>/getUpdates` để lấy `chat.id`.
+
+### Toàn vẹn CSDL
+- Khóa ký: biến môi trường `FIM_HMAC_KEY`, hoặc file `integrity_key_file` (mặc định `data/fim.key`, tự sinh lần đầu, quyền 600 trên Linux). Mất khóa thì báo `NO_KEY`, **không** tự sinh khóa mới (nếu không, xóa file khóa sẽ là cách tắt việc kiểm tra).
+- Mọi thay đổi qua FIM (`init`, `accept`, thêm/xóa whitelist trên CLI hoặc dashboard) tự ký lại.
+- `python main.py verify`: kiểm tra (mã thoát 2 nếu không đạt). `scan` cũng in cảnh báo nếu chữ ký sai.
+- CSDL tạo từ v2.0 chưa có chữ ký → `UNSIGNED`. Sau khi đã kiểm tra nội dung: `python main.py sign`.
+- Để chống được kẻ tấn công đọc được thư mục `data/`, đặt `FIM_HMAC_KEY` hoặc trỏ `integrity_key_file` ra ngoài thư mục CSDL.
+
+### Đăng nhập dashboard
+```bash
+python main.py passwd                     # hỏi mật khẩu (>= 8 ký tự), lưu hash trong CSDL; để trống = bỏ mật khẩu
+FIM_DASHBOARD_PASSWORD='...' docker compose up -d      # hoặc dùng biến môi trường (được ưu tiên)
+```
+Chưa đặt mật khẩu thì dashboard vẫn mở như v2.0 (chỉ nên chạy ở `127.0.0.1`) và hiện nhắc nhở ở trang Tổng quan.
 
 ## Kiến trúc
 ```text
@@ -40,10 +75,16 @@ docker compose logs -f monitor                    # xem cảnh báo thời gian 
 docker compose exec monitor sh tools/demo_attack.sh        # kịch bản vận hành: 8 thay đổi hợp lệ + tấn công
 docker compose exec monitor python main.py alerts          # mọi lệnh CLI chạy được qua exec
 docker compose exec monitor python -m unittest discover -s tests
-docker run --rm -v "${PWD}/docs:/out" fim-project:2.0 python tools/benchmark.py --out /out/benchmark_results_linux.md   # đo đạc trên Linux (đủ 20 kịch bản, RQ1-RQ3)
+docker run --rm -v "${PWD}/docs:/out" fim-project:2.1 python tools/benchmark.py --out /out/benchmark_results_linux.md   # đo đạc trên Linux (đủ 20 kịch bản, RQ1-RQ3)
 docker compose exec monitor cat /etc/os-release            # phiên bản hệ điều hành cho báo cáo
 docker compose down                               # dừng
 docker compose down -v                            # dừng và xóa dữ liệu: DB, log, thư mục demo về trạng thái gốc
+```
+Mật khẩu dashboard, khóa HMAC, token Telegram... truyền qua biến môi trường hoặc file `.env` cạnh `docker-compose.yml` (đã có trong `.gitignore`), ví dụ:
+```bash
+echo "FIM_DASHBOARD_PASSWORD=doi-mat-khau-nay" > .env
+echo "FIM_TELEGRAM_TOKEN=123456:ABC..." >> .env && echo "FIM_TELEGRAM_CHAT_ID=987654321" >> .env
+docker compose up -d --build
 ```
 Thư mục giám sát trong container là volume `fim-watch` (bản sao của `test_folder`), nên muốn tạo thay đổi thì dùng `docker compose exec`, sửa `test_folder` trên máy host không ảnh hưởng tới container.
 
@@ -77,6 +118,10 @@ pip install -r requirements.txt
 | `python main.py whitelist remove ID` | Xóa rule |
 | `python main.py scope` | Các thư mục giám sát + số file trong baseline |
 | `python main.py dashboard [--port 5000]` | Web dashboard tại http://127.0.0.1:5000 |
+| `python main.py verify` | Kiểm tra chữ ký HMAC của baseline/whitelist |
+| `python main.py sign` | Ký lại CSDL (sau khi nâng cấp từ v2.0) |
+| `python main.py passwd [--password X]` | Đặt / bỏ mật khẩu dashboard |
+| `python main.py notify-test` | Gửi thử cảnh báo qua các kênh đã cấu hình |
 
 Dùng config khác: `python main.py --config config.linux.json <lệnh>`.
 
@@ -139,7 +184,7 @@ Cần `sudo` để đọc được `/etc/shadow`, `/root/.ssh`... File không đ
 
 ## Kiểm thử & đo đạc
 ```bash
-python -m unittest discover -s tests -v     # 45 unit test
+python -m unittest discover -s tests -v     # 60 unit test
 python tools/benchmark.py                   # đo đạc (khoảng 8 phút), ghi kết quả ra docs/benchmark_results.md (--quick: bản nhanh)
 ```
 `tools/benchmark.py` gồm 6 phần:
@@ -166,8 +211,8 @@ python tools/benchmark.py                   # đo đạc (khoảng 8 phút), ghi
 - **Thay đổi hàng loạt theo cửa sổ thời gian:** đếm số file có thời gian sửa cách nhau không quá `mass_change_window_seconds`, không đếm cả lần quét. Nhờ vậy `scan` đối chiếu baseline sau nhiều ngày không coi các thay đổi rải rác là "hàng loạt".
 - **Bảo vệ CSDL:** trên Linux, file CSDL chỉ chủ sở hữu đọc/ghi được (quyền 600). Monitor chỉ ghi lại các dòng thay đổi của bảng `current_state` thay vì ghi lại cả bảng sau mỗi lần quét.
 - Trên Windows, `st_mode` không phản ánh quyền thật nên các heuristic về quyền chỉ bật trên Linux (`check_unix_permissions`).
-- Dashboard chỉ lắng nghe `127.0.0.1` và không có đăng nhập. Đây là công cụ nội bộ, không nên mở ra mạng ngoài.
+- Dashboard mặc định chỉ lắng nghe `127.0.0.1`; có đăng nhập khi đặt mật khẩu (xem trên). Dashboard chạy HTTP thường, nếu cần mở ra mạng ngoài hãy đặt sau reverse proxy có HTTPS.
 - DB của phiên bản cũ được tự nâng cấp (thêm cột) khi mở; file trong baseline cũ chưa có uid/gid sẽ không bị báo nhầm là đổi chủ sở hữu.
 
 ## Phạm vi
-Đây là prototype học tập, không thay thế AIDE/Tripwire/Wazuh hoặc giải pháp FIM doanh nghiệp. Hạn chế: không chống được root đã chiếm quyền (có thể sửa cả DB baseline), chưa ký/kiểm tra toàn vẹn chính DB, chưa gửi cảnh báo qua email/Telegram.
+Đây là prototype học tập, không thay thế AIDE/Tripwire/Wazuh hoặc giải pháp FIM doanh nghiệp. Hạn chế: không chống được root đã chiếm quyền và đọc được khóa HMAC (có thể sửa DB rồi ký lại, hoặc dừng hẳn tiến trình monitor); muốn chống điều này cần gửi log/alert sang máy khác (SIEM) ngay khi phát sinh - webhook là bước đầu cho việc đó.

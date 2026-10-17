@@ -43,6 +43,9 @@ def load_config(config_path="config.json") -> dict:
     cfg['watch_paths'] = list(merged.values())
     for key, default in (("database", "data/fim.db"), ("log_file", "logs/fim.log")):
         cfg[key] = _abs(cfg.get(key, default), root)
+    # khóa ký HMAC cho baseline/whitelist; mặc định nằm cạnh CSDL: data/fim.db -> data/fim.key
+    db = Path(cfg['database'])
+    cfg['integrity_key_file'] = _abs(cfg.get('integrity_key_file') or db.with_name(db.stem + '.key'), root)
     cfg['_config_path'] = str(path.resolve())
     return cfg
 

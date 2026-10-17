@@ -3,6 +3,10 @@
 {% block content %}
 <meta http-equiv="refresh" content="10">
 <h1>Tổng quan</h1>
+{% if not auth_enabled %}
+<div class="flash" style="background:var(--med-bg);color:var(--med)">Dashboard chưa đặt mật khẩu. Đặt bằng
+  <code>python main.py passwd</code> hoặc biến môi trường <code>FIM_DASHBOARD_PASSWORD</code>.</div>
+{% endif %}
 <div class="grid">
   <div class="card stat"><div class="k">Cảnh báo chưa xử lý</div><div class="v" style="color:var(--high)">{{ st.new_alerts }}</div></div>
   <div class="card stat"><div class="k">Tổng sự kiện</div><div class="v">{{ st.total_events }}</div></div>

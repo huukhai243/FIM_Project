@@ -64,6 +64,7 @@
 <body>
 <header>
   <div class="brand">🛡 FIM Dashboard</div>
+  {% if not hide_nav %}
   <nav>
     <a href="{{ url_for('overview') }}" class="{{ 'on' if request.endpoint == 'overview' }}">Tổng quan</a>
     <a href="{{ url_for('events') }}" class="{{ 'on' if request.endpoint == 'events' }}">Lịch sử thay đổi</a>
@@ -71,11 +72,19 @@
     <a href="{{ url_for('whitelist') }}" class="{{ 'on' if request.endpoint == 'whitelist' }}">Whitelist</a>
     <a href="{{ url_for('scope') }}" class="{{ 'on' if request.endpoint == 'scope' }}">Phạm vi giám sát</a>
   </nav>
+  {% if auth_enabled %}
+  <form method="post" action="{{ url_for('logout') }}" style="margin-left:auto"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><button>Đăng xuất</button></form>
+  {% endif %}
+  {% endif %}
 </header>
 <main>
   {% with msgs = get_flashed_messages(with_categories=true) %}
     {% for cat, m in msgs %}<div class="flash {{ cat if cat != 'message' }}">{{ m }}</div>{% endfor %}
   {% endwith %}
+  {% for t, (st, desc) in (integrity or {}).items() if st != 'OK' %}
+    <div class="flash error"><b>Cảnh báo toàn vẹn CSDL ({{ st }}):</b> bảng <code>{{ t }}</code> - {{ desc }}.
+      Kiểm tra lại máy chủ; nếu đây là nâng cấp từ phiên bản cũ, chạy <code>python main.py sign</code>.</div>
+  {% endfor %}
   {% block content %}{% endblock %}
 </main>
 </body>
