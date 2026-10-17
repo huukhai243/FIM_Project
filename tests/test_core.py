@@ -328,4 +328,20 @@ class DashboardTest(_TempProject):
         self.assertEqual(service.scan_baseline(str(self.cfgp))[1], [])     # không còn báo DELETED đường dẫn cũ
 
 
+class CliEncodingTest(_TempProject):
+    def test_vietnamese_output_through_pipe(self):
+        """Trước đây: UnicodeEncodeError trên Windows khi output bị pipe/chuyển hướng (cp1252)."""
+        import subprocess, sys
+        env = {k: v for k, v in os.environ.items() if k not in ('PYTHONIOENCODING', 'PYTHONUTF8')}
+        cfg = json.loads(self.cfgp.read_text())
+        cfg['watch_paths'][0] = {'path': cfg['watch_paths'][0]['path'], 'label': 'Cấu hình hệ thống', 'critical': True}
+        self.cfgp.write_text(json.dumps(cfg, ensure_ascii=False), encoding='utf-8')
+        main = Path(__file__).resolve().parent.parent / 'main.py'
+        for cmd in ('init', 'scope', 'whitelist'):
+            r = subprocess.run([sys.executable, str(main), '--config', str(self.cfgp), cmd], capture_output=True, env=env)
+            self.assertEqual(r.returncode, 0, (cmd, r.stderr.decode('utf-8', 'replace')))
+        self.assertIn('Cấu hình hệ thống', r.stdout.decode('utf-8') + subprocess.run(
+            [sys.executable, str(main), '--config', str(self.cfgp), 'scope'], capture_output=True, env=env).stdout.decode('utf-8'))
+
+
 if __name__ == '__main__': unittest.main()

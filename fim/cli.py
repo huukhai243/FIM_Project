@@ -1,8 +1,16 @@
 from __future__ import annotations
-import argparse
+import argparse, sys
 from pathlib import Path
 from .config import load_config, FimError, short
 from .service import initialize, scan_baseline, monitor, accept, open_db
+
+
+def _utf8_console():
+    """Console Windows (cp1252/cp437) hoặc khi chuyển hướng output ra file/pipe không mã hóa được tiếng Việt
+    -> UnicodeEncodeError. Ép stdout/stderr dùng UTF-8."""
+    for st in (sys.stdout, sys.stderr):
+        try: st.reconfigure(encoding='utf-8', errors='replace')
+        except (AttributeError, ValueError): pass
 
 
 def show(results, errors=()):
@@ -86,6 +94,7 @@ def cmd_scope(args):
 
 
 def main():
+    _utf8_console()
     p = argparse.ArgumentParser(description='Lightweight File Integrity Monitoring (FIM)')
     p.add_argument('--config', default='config.json')
     sub = p.add_subparsers(dest='cmd', required=True)
