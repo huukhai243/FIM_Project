@@ -29,12 +29,16 @@ def now_iso():
 class FimDB:
     def __init__(self, db_path):
         p = Path(db_path); p.parent.mkdir(parents=True, exist_ok=True)
+        if os.name == 'posix':
+            # Baseline chỉ chủ sở hữu được đọc/ghi. Tạo file với quyền 600 TRƯỚC khi SQLite mở nó, vì file -wal, -shm
+            # được tạo theo quyền của file CSDL; nếu chmod sau thì hai file này vẫn để người khác đọc được.
+            if not p.exists(): os.close(os.open(p, os.O_WRONLY | os.O_CREAT, 0o600))
+            for f in (p, Path(f'{p}-wal'), Path(f'{p}-shm')):
+                try: os.chmod(f, 0o600)
+                except OSError: pass
         self.conn = sqlite3.connect(p, timeout=10, check_same_thread=False); self.conn.row_factory = sqlite3.Row
         self.conn.execute('PRAGMA journal_mode=WAL')   # dashboard đọc song song khi monitor đang ghi
         self.conn.executescript(SCHEMA); self._migrate(); self.conn.commit()
-        if os.name == 'posix':                         # baseline chỉ chủ sở hữu được đọc/ghi
-            try: os.chmod(p, 0o600)
-            except OSError: pass
 
     def _migrate(self):
         """Thêm cột mới cho DB tạo từ phiên bản cũ."""

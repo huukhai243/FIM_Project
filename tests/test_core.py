@@ -263,6 +263,12 @@ class ServiceTest(_TempProject):
     def test_database_file_readable_by_owner_only(self):
         service.initialize(str(self.cfgp))
         self.assertEqual(os.stat(self.t / 'fim.db').st_mode & 0o777, 0o600)
+        db = FimDB(self.t / 'new.db')       # CSDL mới đang mở: cả file nhật ký -wal, -shm cũng phải là 600
+        try:
+            db.set_meta('k', 'v')
+            for name in ('new.db', 'new.db-wal', 'new.db-shm'):
+                self.assertEqual(os.stat(self.t / name).st_mode & 0o777, 0o600, name)
+        finally: db.close()
 
     def test_watch_path_without_path_key(self):
         self.cfgp.write_text(json.dumps({'watch_paths': [{'label': 'thiếu path'}]}))
