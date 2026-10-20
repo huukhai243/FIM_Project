@@ -28,7 +28,7 @@
 <rect x="190" y="422" width="290" height="82" rx="4" fill="#eef4fa" stroke="#2b5d8a" stroke-width="1.4"/>
 <text x="335.0" y="448.0" text-anchor="middle" font-size="15" font-weight="700" fill="#1f2328">Thu thập · core.py</text>
 <text x="335.0" y="468.0" text-anchor="middle" font-size="14" fill="#1f2328">scan_tree(): SHA-256 + metadata</text>
-<text x="335.0" y="488.0" text-anchor="middle" font-size="14" fill="#1f2328">compare_states(): 5 loại thay đổi</text>
+<text x="335.0" y="488.0" text-anchor="middle" font-size="14" fill="#1f2328">compare_states(): 7 loại thay đổi</text>
 <rect x="500" y="422" width="260" height="82" rx="4" fill="#eef4fa" stroke="#2b5d8a" stroke-width="1.4"/>
 <text x="630.0" y="448.0" text-anchor="middle" font-size="15" font-weight="700" fill="#1f2328">Phân tích · rules.py</text>
 <text x="630.0" y="468.0" text-anchor="middle" font-size="14" fill="#1f2328">classify(): heuristic → điểm</text>
