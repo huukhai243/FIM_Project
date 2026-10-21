@@ -2,6 +2,8 @@
 
 **Đề tài 5:** Hệ thống giám sát toàn vẹn file & phát hiện thay đổi bất thường (File Integrity Monitoring - FIM)
 
+Hướng dẫn sử dụng chi tiết (cài đặt, cấu hình, dashboard, dòng lệnh, xử lý cảnh báo, xử lý sự cố): [docs/HUONG_DAN_SU_DUNG.md](docs/HUONG_DAN_SU_DUNG.md)
+
 ## Đối chiếu yêu cầu
 
 | Phần | Yêu cầu | Hiện thực | Module |
@@ -151,6 +153,7 @@ python tools/benchmark.py                   # đo đạc (khoảng 8 phút), ghi
 6. RQ3: CPU và RAM của tiến trình monitor với 100 / 500 / 1.000 / 5.000 file (chỉ Linux).
 
 ## Tài liệu cho báo cáo
+- `docs/HUONG_DAN_SU_DUNG.md`: hướng dẫn sử dụng cho người cài đặt và vận hành.
 - `docs/diagrams.md`: mã nguồn Mermaid của sơ đồ kiến trúc, triển khai, tuần tự, hoạt động, cơ sở dữ liệu.
 - `docs/diagrams/*.svg`: 4 sơ đồ use case (tổng quan + 3 phân rã), chèn thẳng vào Word.
 - `docs/benchmark_results_linux.md`: kết quả đo trong Docker (Debian 13, inotify), đủ 20 kịch bản và RQ1-RQ3, dùng cho báo cáo.
