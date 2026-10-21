@@ -66,6 +66,15 @@ Chạy kịch bản mẫu (2 thay đổi hợp lệ, 6 thao tác mô phỏng t�
 docker compose exec -e DELAY=5 monitor sh tools/demo_attack.sh
 ```
 
+Khi thuyết trình, dùng script demo từng bước (chạy trên máy host, cần Python 3, không cần cài thêm thư viện). Mỗi thao tác hiện lệnh và ý nghĩa, nhấn Enter mới chạy, rồi in kết quả: hợp lệ hay cảnh báo, mức rủi ro, điểm của từng dấu hiệu. Script tự mở các trang dashboard đúng lúc.
+
+```bash
+python tools/demo_live.py --reset   # xóa dữ liệu cũ, dựng lại hệ thống rồi demo đủ 8 bước
+python tools/demo_live.py --short   # bản rút gọn: bước 1, 3, 4, 6, 8
+python tools/demo_live.py --auto    # chạy thử một mạch, không chờ Enter
+```
+Khi script chờ Enter: gõ `s` để bỏ qua thao tác đó, `q` để dừng.
+
 > **Lưu ý:** thư mục được giám sát là **volume trong container** (bản sao của `test_folder`). Sửa `test_folder` trên máy host không ảnh hưởng tới container; muốn tạo thay đổi thì dùng `docker compose exec monitor ...`. Mọi lệnh ở mục 5 đều chạy được qua Docker bằng cách thêm `docker compose exec monitor` ở đầu.
 
 ### 2.3 Cách B: chạy trực tiếp bằng Python

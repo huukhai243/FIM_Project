@@ -40,6 +40,7 @@ docker compose up -d --build                      # build image, chạy 2 contai
 docker compose logs -f monitor                    # xem cảnh báo thời gian thực (Ctrl+C để thoát xem log)
 # Dashboard: http://127.0.0.1:5000
 docker compose exec monitor sh tools/demo_attack.sh        # kịch bản vận hành: 8 thay đổi hợp lệ + tấn công
+python tools/demo_live.py                                  # demo khi thuyết trình (chạy trên host): 8 bước, Enter để chạy từng thao tác, giải thích điểm
 docker compose exec monitor python main.py alerts          # mọi lệnh CLI chạy được qua exec
 docker compose exec monitor python -m unittest discover -s tests
 docker run --rm -v "${PWD}/docs:/out" fim-project:2.0 python tools/benchmark.py --out /out/benchmark_results_linux.md   # đo đạc trên Linux (đủ 20 kịch bản, RQ1-RQ3)
